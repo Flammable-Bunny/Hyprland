@@ -393,6 +393,57 @@ void CCompositor::initServer(std::string socketName, int socketFd) {
     Debug::log(LOG, "DRM syncobj timeline support: no (not linux)");
 #endif
 
+    // Enumerate secondary GPU render nodes for cross-GPU buffer import
+    // This allows clients rendering on a different GPU (e.g., Intel) to submit buffers
+    // to a compositor running on the primary GPU (e.g., AMD)
+    {
+        drmDevice* primaryDevice = nullptr;
+        if (m_drmRenderNode.fd >= 0 && drmGetDevice(m_drmRenderNode.fd, &primaryDevice) == 0) {
+            drmDevice** devices = nullptr;
+            int         numDevices = drmGetDevices2(0, nullptr, 0);
+            if (numDevices > 0) {
+                devices = new drmDevice*[numDevices];
+                numDevices = drmGetDevices2(0, devices, numDevices);
+
+                for (int i = 0; i < numDevices; i++) {
+                    // Skip the primary device
+                    if (drmDevicesEqual(devices[i], primaryDevice))
+                        continue;
+
+                    // Check if this device has a render node
+                    if (!(devices[i]->available_nodes & (1 << DRM_NODE_RENDER)))
+                        continue;
+
+                    const char* renderPath = devices[i]->nodes[DRM_NODE_RENDER];
+                    int         fd = open(renderPath, O_RDWR | O_CLOEXEC);
+                    if (fd < 0) {
+                        Debug::log(WARN, "Cross-GPU: Failed to open secondary render node {}", renderPath);
+                        continue;
+                    }
+
+                    // Get device ID for later comparison
+                    struct stat statbuf;
+                    if (fstat(fd, &statbuf) == 0) {
+                        m_secondaryDrmRenderNode.fd = fd;
+                        m_secondaryDrmRenderNode.device = statbuf.st_rdev;
+                        m_secondaryDrmRenderNode.available = true;
+                        Debug::log(LOG, "Cross-GPU: Opened secondary render node {} (fd: {})", renderPath, fd);
+                        break; // Use first available secondary GPU
+                    } else {
+                        close(fd);
+                    }
+                }
+
+                drmFreeDevices(devices, numDevices);
+                delete[] devices;
+            }
+            drmFreeDevice(&primaryDevice);
+        }
+
+        if (!m_secondaryDrmRenderNode.available)
+            Debug::log(LOG, "Cross-GPU: No secondary render node found (single GPU system or enumeration failed)");
+    }
+
     if (!socketName.empty() && socketFd != -1) {
         fcntl(socketFd, F_SETFD, FD_CLOEXEC);
         const auto RETVAL = wl_display_add_socket_fd(m_wlDisplay, socketFd);
@@ -557,6 +608,13 @@ void CCompositor::cleanup() {
 
     m_isShuttingDown      = true;
     Debug::m_shuttingDown = true;
+
+    // Close secondary render node if opened
+    if (m_secondaryDrmRenderNode.fd >= 0) {
+        close(m_secondaryDrmRenderNode.fd);
+        m_secondaryDrmRenderNode.fd = -1;
+        m_secondaryDrmRenderNode.available = false;
+    }
 
 #ifdef USES_SYSTEMD
     if (NSystemd::sdBooted() > 0 && !envEnabled("HYPRLAND_NO_SD_NOTIFY"))

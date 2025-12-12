@@ -1,10 +1,12 @@
 #include "LinuxDMABUF.hpp"
 #include <algorithm>
+#include <array>
 #include <set>
 #include <tuple>
 #include "../helpers/MiscFunctions.hpp"
 #include <sys/mman.h>
 #include <xf86drm.h>
+#include <drm_fourcc.h>
 #include <fcntl.h>
 #include <sys/stat.h>
 #include "core/Compositor.hpp"
@@ -92,6 +94,32 @@ CDMABUFFormatTable::CDMABUFFormatTable(SDMABUFTranche _rendererTranche, std::vec
     munmap(arr, m_tableSize);
 
     m_tableFD = std::move(fds[1]);
+
+    // Store format entries for later index lookup (cross-GPU support)
+    m_formatEntries = std::move(formatsVec);
+}
+
+bool CDMABUFFormatTable::computeIndicesForTranche(SDMABUFTranche& tranche) {
+    tranche.indices.clear();
+    bool allFound = true;
+
+    for (const auto& fmt : tranche.formats) {
+        for (const auto& mod : fmt.modifiers) {
+            auto it = std::ranges::find_if(m_formatEntries, [&fmt, &mod](const SDMABUFFormatTableEntry& entry) {
+                return entry.fmt == fmt.drmFormat && entry.modifier == mod;
+            });
+
+            if (it != m_formatEntries.end()) {
+                tranche.indices.push_back(static_cast<uint16_t>(it - m_formatEntries.begin()));
+            } else {
+                // Format/modifier not in table - this is expected for cross-GPU
+                // when the secondary device's formats aren't in the primary's table
+                allFound = false;
+            }
+        }
+    }
+
+    return allFound;
 }
 
 CLinuxDMABuffer::CLinuxDMABuffer(uint32_t id, wl_client* client, Aquamarine::SDMABUFAttrs attrs) {
@@ -236,15 +264,34 @@ bool CLinuxDMABUFParamsResource::commence() {
     for (int i = 0; i < m_attrs->planes; i++) {
         uint32_t handle = 0;
 
-        if (drmPrimeFDToHandle(PROTO::linuxDma->m_mainDeviceFD.get(), m_attrs->fds.at(i), &handle)) {
-            LOGM(ERR, "Failed to import dmabuf fd");
-            return false;
+        // Try primary device first (e.g., AMD)
+        if (drmPrimeFDToHandle(PROTO::linuxDma->m_mainDeviceFD.get(), m_attrs->fds.at(i), &handle) == 0) {
+            // Primary device import succeeded
+            if (drmCloseBufferHandle(PROTO::linuxDma->m_mainDeviceFD.get(), handle)) {
+                LOGM(ERR, "Failed to close dmabuf handle on primary device");
+                return false;
+            }
+            continue;
         }
 
-        if (drmCloseBufferHandle(PROTO::linuxDma->m_mainDeviceFD.get(), handle)) {
-            LOGM(ERR, "Failed to close dmabuf handle");
-            return false;
+        // Primary failed, try secondary device if available (e.g., Intel)
+        if (g_pCompositor->m_secondaryDrmRenderNode.available && g_pCompositor->m_secondaryDrmRenderNode.fd >= 0) {
+            if (drmPrimeFDToHandle(g_pCompositor->m_secondaryDrmRenderNode.fd, m_attrs->fds.at(i), &handle) == 0) {
+                // Secondary device import succeeded - mark buffer as cross-GPU
+                m_attrs->crossGPU = true;
+                m_attrs->sourceDevice = g_pCompositor->m_secondaryDrmRenderNode.fd;
+                LOGM(LOG, "Cross-GPU: dmabuf imported via secondary render node");
+                if (drmCloseBufferHandle(g_pCompositor->m_secondaryDrmRenderNode.fd, handle)) {
+                    LOGM(ERR, "Failed to close dmabuf handle on secondary device");
+                    return false;
+                }
+                continue;
+            }
         }
+
+        // Both devices failed
+        LOGM(ERR, "Failed to import dmabuf fd on any device");
+        return false;
     }
 
     return true;
@@ -336,7 +383,14 @@ void CLinuxDMABUFFeedbackResource::sendDefaultFeedback() {
     };
     m_resource->sendMainDevice(&deviceArr);
 
+    // Send primary GPU tranche first (preferred)
     sendTranche(formatTable->m_rendererTranche);
+
+    // Cross-GPU support: also send secondary device tranche if available and has valid indices
+    // This tells clients that buffers from the secondary GPU are also acceptable
+    if (PROTO::linuxDma->m_hasSecondaryDevice && !PROTO::linuxDma->m_secondaryDeviceTranche.indices.empty()) {
+        sendTranche(PROTO::linuxDma->m_secondaryDeviceTranche);
+    }
 
     m_resource->sendDone();
 
@@ -492,6 +546,44 @@ CLinuxDMABufV1Protocol::CLinuxDMABufV1Protocol(const wl_interface* iface, const 
         } else {
             LOGM(ERR, "DRM device {} has no render node, disabling linux dmabuf checks", device->nodes[DRM_NODE_PRIMARY] ? device->nodes[DRM_NODE_PRIMARY] : "null");
             drmFreeDevice(&device);
+        }
+
+        // Cross-GPU support: set up secondary device tranche
+        if (g_pCompositor->m_secondaryDrmRenderNode.available && g_pCompositor->m_secondaryDrmRenderNode.device != 0) {
+            m_secondaryDevice      = g_pCompositor->m_secondaryDrmRenderNode.device;
+            m_hasSecondaryDevice   = true;
+
+            // Create a tranche for the secondary device with common LINEAR formats
+            // These are formats that our CPU copy path can handle
+            m_secondaryDeviceTranche.device = m_secondaryDevice;
+            m_secondaryDeviceTranche.flags  = 0; // no special flags
+
+            // Add common formats with LINEAR modifier (required for mmap-based CPU copy)
+            // Only formats supported by GLES (no GL_BGR in GLES)
+            static constexpr std::array<uint32_t, 5> commonFormats = {
+                DRM_FORMAT_ARGB8888,
+                DRM_FORMAT_XRGB8888,
+                DRM_FORMAT_ABGR8888,
+                DRM_FORMAT_XBGR8888,
+                DRM_FORMAT_RGB888,
+            };
+
+            for (uint32_t fmt : commonFormats) {
+                m_secondaryDeviceTranche.formats.push_back(SDRMFormat{
+                    .drmFormat = fmt,
+                    .modifiers = {DRM_FORMAT_MOD_LINEAR},
+                });
+            }
+
+            // Compute indices for the secondary device tranche
+            // Some formats may not be in the main format table, which is fine
+            bool allFound = m_formatTable->computeIndicesForTranche(m_secondaryDeviceTranche);
+            if (!allFound) {
+                LOGM(LOG, "Cross-GPU: Some secondary device formats not in main format table (expected)");
+            }
+
+            LOGM(LOG, "Cross-GPU: Secondary device tranche created with {} formats ({} indexed)",
+                 commonFormats.size(), m_secondaryDeviceTranche.indices.size());
         }
     });
 }

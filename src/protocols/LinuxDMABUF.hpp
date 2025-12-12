@@ -51,10 +51,18 @@ class CDMABUFFormatTable {
     CDMABUFFormatTable(SDMABUFTranche rendererTranche, std::vector<std::pair<PHLMONITORREF, SDMABUFTranche>> tranches);
     ~CDMABUFFormatTable() = default;
 
+    // Compute indices for a tranche using existing format entries
+    // Returns true if all formats were found, false if some are missing
+    bool computeIndicesForTranche(SDMABUFTranche& tranche);
+
     Hyprutils::OS::CFileDescriptor                        m_tableFD;
     size_t                                                m_tableSize = 0;
     SDMABUFTranche                                        m_rendererTranche;
     std::vector<std::pair<PHLMONITORREF, SDMABUFTranche>> m_monitorTranches;
+
+  private:
+    // Store format entries for index lookup (used for cross-GPU tranche computation)
+    std::vector<SDMABUFFormatTableEntry> m_formatEntries;
 };
 
 class CLinuxDMABUFParamsResource {
@@ -131,6 +139,11 @@ class CLinuxDMABufV1Protocol : public IWaylandProtocol {
     UP<CDMABUFFormatTable>                        m_formatTable;
     dev_t                                         m_mainDevice;
     Hyprutils::OS::CFileDescriptor                m_mainDeviceFD;
+
+    // Cross-GPU support: secondary device for clients rendering on different GPU
+    dev_t                                         m_secondaryDevice      = 0;
+    bool                                          m_hasSecondaryDevice   = false;
+    SDMABUFTranche                                m_secondaryDeviceTranche;
 
     friend class CLinuxDMABUFResource;
     friend class CLinuxDMABUFFeedbackResource;

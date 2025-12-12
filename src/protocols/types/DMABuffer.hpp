@@ -23,6 +23,9 @@ class CDMABuffer : public IHLBuffer {
   private:
     Aquamarine::SDMABUFAttrs m_attrs;
 
+    // Cross-GPU support: creates texture via CPU copy when buffer is from different GPU
+    bool createCrossGPUTexture();
+
     struct {
         CHyprSignalListener resourceDestroy;
     } m_listeners;

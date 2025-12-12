@@ -39,6 +39,14 @@ class CCompositor {
         bool syncObjSupport = false;
     } m_drmRenderNode;
 
+    // Secondary GPU render node for cross-GPU buffer import
+    // Used when clients render on a different GPU than the compositor
+    struct {
+        int     fd        = -1;
+        dev_t   device    = 0;
+        bool    available = false;
+    } m_secondaryDrmRenderNode;
+
     bool                                         m_initialized = false;
     bool                                         m_safeMode    = false;
     SP<Aquamarine::CBackend>                     m_aqBackend;

@@ -7,8 +7,9 @@
     # <https://github.com/nix-systems/nix-systems>
     systems.url = "github:nix-systems/default-linux";
 
+    # Local fork with cross-GPU support
     aquamarine = {
-      url = "github:hyprwm/aquamarine";
+      url = "git+file:///home/bunny/IdeaProjects/aquamarine";
       inputs.nixpkgs.follows = "nixpkgs";
       inputs.systems.follows = "systems";
       inputs.hyprutils.follows = "hyprutils";

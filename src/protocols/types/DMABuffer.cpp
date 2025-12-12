@@ -3,12 +3,19 @@
 #include "../../desktop/view/LayerSurface.hpp"
 #include "../../render/Renderer.hpp"
 #include "../../helpers/Format.hpp"
+#include "../../Compositor.hpp"
+#include "../../render/OpenGL.hpp"
+#include "../../render/Texture.hpp"
 
 #if defined(__linux__)
 #include <linux/dma-buf.h>
 #include <linux/sync_file.h>
 #endif
 #include <sys/ioctl.h>
+#include <sys/mman.h>
+#include <xf86drm.h>
+#include <drm_fourcc.h>
+#include <libdrm/drm_mode.h>
 
 using namespace Hyprutils::OS;
 
@@ -22,6 +29,30 @@ CDMABuffer::CDMABuffer(uint32_t id, wl_client* client, Aquamarine::SDMABUFAttrs 
 
     size          = m_attrs.size;
     m_resource    = CWLBufferResource::create(makeShared<CWlBuffer>(client, 1, id));
+
+    // For cross-GPU buffers, we need special handling since the buffer
+    // was created on a different GPU than the compositor's primary
+    if (m_attrs.crossGPU && g_pCompositor->m_secondaryDrmRenderNode.available) {
+        Debug::log(LOG, "CDMABuffer: Cross-GPU buffer detected, using CPU copy fallback");
+
+        // For cross-GPU, try CPU copy path:
+        // 1. Map the dmabuf via mmap (dmabufs can often be mmap'd directly)
+        // 2. Create texture with glTexImage2D
+        // This is slower but works across different GPU vendors
+
+        if (!createCrossGPUTexture()) {
+            Debug::log(ERR, "CDMABuffer: Cross-GPU fallback failed, trying EGLImage anyway");
+            // Fall through to try EGLImage as last resort
+        } else {
+            m_opaque  = NFormatUtils::isFormatOpaque(m_attrs.format);
+            m_success = m_texture && m_texture->m_texID;
+            if (m_success) {
+                Debug::log(LOG, "CDMABuffer: Cross-GPU texture created successfully via CPU copy");
+                return;
+            }
+        }
+    }
+
     auto eglImage = g_pHyprOpenGL->createEGLImage(m_attrs);
 
     if UNLIKELY (!eglImage) {
@@ -160,5 +191,164 @@ CFileDescriptor CDMABuffer::exportSyncFile() {
     }
 
     return syncFd;
+#endif
+}
+
+// Cross-GPU texture creation via CPU copy
+// This is used when a buffer was created on a different GPU (e.g., Intel)
+// than the compositor's primary GPU (e.g., AMD)
+bool CDMABuffer::createCrossGPUTexture() {
+#if !defined(__linux__)
+    return false;
+#else
+    if (m_attrs.planes != 1) {
+        Debug::log(ERR, "Cross-GPU: Multi-plane buffers not yet supported");
+        return false;
+    }
+
+    // Calculate buffer size based on stride and height
+    // For simplicity, we assume a simple linear layout
+    const size_t bufferSize = m_attrs.strides[0] * static_cast<size_t>(m_attrs.size.y);
+    if (bufferSize == 0) {
+        Debug::log(ERR, "Cross-GPU: Invalid buffer size");
+        return false;
+    }
+
+    // Try to mmap the dmabuf fd directly
+    // This works for many drivers when the buffer uses a linear modifier
+    void* mapped = mmap(nullptr, bufferSize, PROT_READ, MAP_SHARED, m_attrs.fds[0], m_attrs.offsets[0]);
+    if (mapped == MAP_FAILED) {
+        Debug::log(ERR, "Cross-GPU: Failed to mmap dmabuf fd (errno: {}), trying DRM handle path", errno);
+
+        // Fallback: try to map via DRM handle on the secondary device
+        if (m_attrs.sourceDevice < 0) {
+            Debug::log(ERR, "Cross-GPU: No source device available for DRM handle mapping");
+            return false;
+        }
+
+        uint32_t handle = 0;
+        if (drmPrimeFDToHandle(m_attrs.sourceDevice, m_attrs.fds[0], &handle) != 0) {
+            Debug::log(ERR, "Cross-GPU: drmPrimeFDToHandle failed");
+            return false;
+        }
+
+        // For DRM dumb buffers, we can use MODE_MAP_DUMB
+        // But for GPU-rendered buffers, this may not work
+        // This is a best-effort fallback
+        struct drm_mode_map_dumb mapReq = {
+            .handle = handle,
+            .pad = 0,
+            .offset = 0,
+        };
+
+        if (drmIoctl(m_attrs.sourceDevice, DRM_IOCTL_MODE_MAP_DUMB, &mapReq) != 0) {
+            Debug::log(ERR, "Cross-GPU: DRM_IOCTL_MODE_MAP_DUMB failed");
+            drmCloseBufferHandle(m_attrs.sourceDevice, handle);
+            return false;
+        }
+
+        mapped = mmap(nullptr, bufferSize, PROT_READ, MAP_SHARED, m_attrs.sourceDevice, mapReq.offset);
+        drmCloseBufferHandle(m_attrs.sourceDevice, handle);
+
+        if (mapped == MAP_FAILED) {
+            Debug::log(ERR, "Cross-GPU: mmap via DRM handle failed");
+            return false;
+        }
+    }
+
+    // Determine GL format from DRM format
+    GLenum glFormat = GL_RGBA;
+    GLenum glType = GL_UNSIGNED_BYTE;
+    int    bpp = 4;
+
+    switch (m_attrs.format) {
+        case DRM_FORMAT_ARGB8888:
+        case DRM_FORMAT_XRGB8888:
+            glFormat = GL_BGRA_EXT;
+            glType = GL_UNSIGNED_BYTE;
+            bpp = 4;
+            break;
+        case DRM_FORMAT_ABGR8888:
+        case DRM_FORMAT_XBGR8888:
+            glFormat = GL_RGBA;
+            glType = GL_UNSIGNED_BYTE;
+            bpp = 4;
+            break;
+        case DRM_FORMAT_RGB888:
+            glFormat = GL_RGB;
+            glType = GL_UNSIGNED_BYTE;
+            bpp = 3;
+            break;
+        case DRM_FORMAT_BGR888:
+            // BGR888 is not directly supported in GLES, would need swizzling
+            // Fall through to unsupported for now
+            Debug::log(ERR, "Cross-GPU: BGR888 format not supported in GLES");
+            munmap(mapped, bufferSize);
+            return false;
+        default:
+            Debug::log(ERR, "Cross-GPU: Unsupported DRM format 0x{:x}", m_attrs.format);
+            munmap(mapped, bufferSize);
+            return false;
+    }
+
+    // Create GL texture
+    GLuint texID = 0;
+    glGenTextures(1, &texID);
+    if (texID == 0) {
+        Debug::log(ERR, "Cross-GPU: glGenTextures failed");
+        munmap(mapped, bufferSize);
+        return false;
+    }
+
+    glBindTexture(GL_TEXTURE_2D, texID);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+
+    // Handle stride (row alignment)
+    const int expectedStride = static_cast<int>(m_attrs.size.x) * bpp;
+    if (m_attrs.strides[0] != static_cast<uint32_t>(expectedStride)) {
+        glPixelStorei(GL_UNPACK_ROW_LENGTH, m_attrs.strides[0] / bpp);
+    }
+
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, static_cast<GLsizei>(m_attrs.size.x), static_cast<GLsizei>(m_attrs.size.y),
+                 0, glFormat, glType, mapped);
+
+    // Reset row length
+    glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
+    glBindTexture(GL_TEXTURE_2D, 0);
+
+    munmap(mapped, bufferSize);
+
+    // Check for GL errors
+    GLenum err = glGetError();
+    if (err != GL_NO_ERROR) {
+        Debug::log(ERR, "Cross-GPU: GL error after texture upload: 0x{:x}", err);
+        glDeleteTextures(1, &texID);
+        return false;
+    }
+
+    // Create texture wrapper
+    m_texture = makeShared<CTexture>();
+    m_texture->m_texID = texID;
+    m_texture->m_size = m_attrs.size;
+    m_texture->m_target = GL_TEXTURE_2D;
+    m_texture->m_isSynchronous = true; // CPU-copied textures are synchronous
+
+    // Set texture type based on format (with/without alpha)
+    switch (m_attrs.format) {
+        case DRM_FORMAT_XRGB8888:
+        case DRM_FORMAT_XBGR8888:
+        case DRM_FORMAT_RGB888:
+            m_texture->m_type = TEXTURE_RGBX;
+            break;
+        default:
+            m_texture->m_type = TEXTURE_RGBA;
+            break;
+    }
+
+    Debug::log(LOG, "Cross-GPU: Created texture {} ({}x{}) via CPU copy", texID, m_attrs.size.x, m_attrs.size.y);
+    return true;
 #endif
 }
