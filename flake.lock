@@ -16,11 +16,11 @@
         ]
       },
       "locked": {
-        "lastModified": 1765523701,
-        "narHash": "sha256-w4sf16MYH+gUghN/gg09Pvg//FeGbRx+cXUMBmTVT6Y=",
+        "lastModified": 1765657670,
+        "narHash": "sha256-eMotLnRYH1dtdA0CLJWQ+biZG9PYTCZh8+RnhVpVu70=",
         "owner": "Flammable-Bunny",
         "repo": "aquamarine",
-        "rev": "137e1fe3dba39137f73de8ea048244f3327d6b0d",
+        "rev": "3e882e7a8be2dd63741b02ed2b54d557d85391e8",
         "type": "github"
       },
       "original": {
