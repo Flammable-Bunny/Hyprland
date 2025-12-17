@@ -298,10 +298,19 @@ bool CLinuxDMABUFParamsResource::commence() {
                  g_pCompositor->m_secondaryDrmRenderNode.available, g_pCompositor->m_secondaryDrmRenderNode.fd);
         }
 
-        // Both devices failed
-        LOGM(ERR, "Failed to import dmabuf plane {} on any device (primary: {}, secondary: {})",
+        // Both devices failed.
+        //
+        // Some clients (or intermediaries) may submit dma-bufs that cannot be imported via
+        // drmPrimeFDToHandle on either render node (e.g. foreign driver, missing PRIME import
+        // support, or atypical dma-buf exporter). Hyprland may still be able to handle such
+        // buffers via other mechanisms (EGL import, CPU copy fallback, etc).
+        //
+        // Do not reject the wl_buffer here; continue and let the renderer decide.
+        LOGM(WARN,
+             "dmabuf import check failed: plane {} could not be imported via drmPrimeFDToHandle (primary: {}, secondary: {}), continuing anyway",
              i, primaryResult, g_pCompositor->m_secondaryDrmRenderNode.available ? "checked" : "unavailable");
-        return false;
+        m_attrs->crossGPU = true;
+        continue;
     }
 
     return true;
