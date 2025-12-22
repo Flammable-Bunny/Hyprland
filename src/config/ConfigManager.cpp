@@ -547,9 +547,10 @@ CConfigManager::CConfigManager() {
     registerConfigVar("debug:overlay", Hyprlang::INT{0});
     registerConfigVar("debug:damage_blink", Hyprlang::INT{0});
     registerConfigVar("debug:pass", Hyprlang::INT{0});
-    registerConfigVar("debug:disable_logs", Hyprlang::INT{1});
+    registerConfigVar("debug:disable_logs", Hyprlang::INT{0});
+    registerConfigVar("debug:direct_scanout_log", Hyprlang::INT{1});
     registerConfigVar("debug:disable_time", Hyprlang::INT{1});
-    registerConfigVar("debug:enable_stdout_logs", Hyprlang::INT{0});
+    registerConfigVar("debug:enable_stdout_logs", Hyprlang::INT{1});
     registerConfigVar("debug:damage_tracking", {sc<Hyprlang::INT>(DAMAGE_TRACKING_FULL)});
     registerConfigVar("debug:manual_crash", Hyprlang::INT{0});
     registerConfigVar("debug:suppress_errors", Hyprlang::INT{0});
@@ -882,10 +883,13 @@ CConfigManager::CConfigManager() {
         Debug::log(LOG, "Warning: config descriptions have {} entries, but there are {} config values. This should fail tests!!", CONFIG_OPTIONS.size(), m_configValueNumber);
 
     if (!g_pCompositor->m_onlyConfigVerification) {
-        Debug::log(
-            INFO,
-            "!!!!HEY YOU, YES YOU!!!!: further logs to stdout / logfile are disabled by default. BEFORE SENDING THIS LOG, ENABLE THEM. Use debug:disable_logs = false to do so: "
-            "https://wiki.hypr.land/Configuring/Variables/#debug");
+        const auto disableLogs = std::any_cast<Hyprlang::INT>(m_config->getConfigValue("debug:disable_logs"));
+        if (disableLogs) {
+            Debug::log(
+                INFO,
+                "!!!!HEY YOU, YES YOU!!!!: further logs to stdout / logfile are disabled by default. BEFORE SENDING THIS LOG, ENABLE THEM. Use debug:disable_logs = false to do so: "
+                "https://wiki.hypr.land/Configuring/Variables/#debug");
+        }
     }
 
     Debug::m_disableLogs = rc<int64_t* const*>(m_config->getConfigValuePtr("debug:disable_logs")->getDataStaticPtr());

@@ -175,6 +175,7 @@ class CMonitor {
     // for direct scanout
     PHLWINDOWREF m_lastScanout;
     bool         m_scanoutNeedsCursorUpdate = false;
+    uint16_t     m_lastDSBlockReason        = 0;
 
     // for special fade/blur
     PHLANIMVAR<float> m_specialFade;

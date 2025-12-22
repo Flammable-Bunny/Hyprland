@@ -1730,6 +1730,11 @@ uint16_t CMonitor::isDSBlocked(bool full) {
     static auto PDIRECTSCANOUT = CConfigValue<Hyprlang::INT>("render:direct_scanout");
     static auto PPASS          = CConfigValue<Hyprlang::INT>("render:cm_fs_passthrough");
     static auto PNONSHADER     = CConfigValue<Hyprlang::INT>("render:non_shader_cm");
+    static auto PDSLOG         = CConfigValue<Hyprlang::INT>("debug:direct_scanout_log");
+    const bool  LOGDS          = *PDSLOG != 0;
+
+    if (LOGDS)
+        full = true;
 
     if (*PDIRECTSCANOUT == 0) {
         reasons |= DS_BLOCK_USER;
@@ -1802,6 +1807,51 @@ uint16_t CMonitor::isDSBlocked(bool full) {
     const bool surfaceIsHDR = PSURFACE->m_colorManagement.valid() && (PSURFACE->m_colorManagement->isHDR() || PSURFACE->m_colorManagement->isWindowsScRGB());
     if (needsCM() && *PNONSHADER != CM_NS_IGNORE && !canNoShaderCM() && ((inHDR() && (*PPASS == 0 || !surfaceIsHDR)) || (!inHDR() && (*PPASS != 1 || surfaceIsHDR))))
         reasons |= DS_BLOCK_CM;
+
+    if (LOGDS && reasons != m_lastDSBlockReason) {
+        std::string reasonStr;
+        auto        appendReason = [&reasonStr](const char* name) {
+            if (!reasonStr.empty())
+                reasonStr += ",";
+            reasonStr += name;
+        };
+
+        if (reasons == DS_OK) {
+            reasonStr = "ok";
+        } else {
+            if (reasons & DS_BLOCK_UNKNOWN)
+                appendReason("unknown");
+            if (reasons & DS_BLOCK_USER)
+                appendReason("user");
+            if (reasons & DS_BLOCK_WINDOWED)
+                appendReason("windowed");
+            if (reasons & DS_BLOCK_CONTENT)
+                appendReason("content");
+            if (reasons & DS_BLOCK_MIRROR)
+                appendReason("mirror");
+            if (reasons & DS_BLOCK_RECORD)
+                appendReason("record");
+            if (reasons & DS_BLOCK_SW)
+                appendReason("sw");
+            if (reasons & DS_BLOCK_CANDIDATE)
+                appendReason("candidate");
+            if (reasons & DS_BLOCK_SURFACE)
+                appendReason("surface");
+            if (reasons & DS_BLOCK_TRANSFORM)
+                appendReason("transform");
+            if (reasons & DS_BLOCK_DMA)
+                appendReason("dmabuf");
+            if (reasons & DS_BLOCK_TEARING)
+                appendReason("tearing");
+            if (reasons & DS_BLOCK_FAILED)
+                appendReason("failed");
+            if (reasons & DS_BLOCK_CM)
+                appendReason("cm");
+        }
+
+        Debug::log(LOG, "Direct scanout {} on {} (reasons: {})", reasons == DS_OK ? "allowed" : "blocked", m_name, reasonStr);
+        m_lastDSBlockReason = reasons;
+    }
 
     return reasons;
 }

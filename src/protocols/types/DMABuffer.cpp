@@ -6,6 +6,7 @@
 #include "../../Compositor.hpp"
 #include "../../render/OpenGL.hpp"
 #include "../../render/Texture.hpp"
+#include <stdlib.h>
 
 #if defined(__linux__)
 #include <linux/dma-buf.h>
@@ -32,8 +33,11 @@ CDMABuffer::CDMABuffer(uint32_t id, wl_client* client, Aquamarine::SDMABUFAttrs 
 
     // For cross-GPU buffers, we need special handling since the buffer
     // was created on a different GPU than the compositor's primary
-    if (m_attrs.crossGPU && g_pCompositor->m_secondaryDrmRenderNode.available) {
-        Debug::log(LOG, "CDMABuffer: Cross-GPU buffer detected, using CPU copy fallback");
+    const bool enableCPUFallback  = getenv("HYPRLAND_DMABUF_ENABLE_CPU_FALLBACK") != NULL;
+    const bool disableCPUFallback = getenv("HYPRLAND_DMABUF_DISABLE_CPU_FALLBACK") != NULL;
+    const bool allowCPUFallback   = enableCPUFallback && !disableCPUFallback;
+    if (m_attrs.crossGPU && g_pCompositor->m_secondaryDrmRenderNode.available && allowCPUFallback) {
+        Debug::log(LOG, "CDMABuffer: Cross-GPU buffer detected, using CPU copy fallback (opt-in)");
 
         // For cross-GPU, try CPU copy path:
         // 1. Map the dmabuf via mmap (dmabufs can often be mmap'd directly)
@@ -51,6 +55,8 @@ CDMABuffer::CDMABuffer(uint32_t id, wl_client* client, Aquamarine::SDMABUFAttrs 
                 return;
             }
         }
+    } else if (m_attrs.crossGPU && g_pCompositor->m_secondaryDrmRenderNode.available && !allowCPUFallback) {
+        Debug::log(LOG, "CDMABuffer: Cross-GPU buffer detected, CPU fallback disabled; trying EGL import");
     }
 
     auto eglImage = g_pHyprOpenGL->createEGLImage(m_attrs);
