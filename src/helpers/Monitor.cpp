@@ -1736,6 +1736,7 @@ uint16_t CMonitor::isDSBlocked(bool full) {
     static auto PDSLOG         = CConfigValue<Hyprlang::INT>("debug:direct_scanout_log");
     const bool  LOGDS          = *PDSLOG != 0;
     const bool  FORCE_LOG      = LOGDS && m_dsLogTimer.getMillis() >= 1000.F;
+    bool        earlyExit      = false;
 
     if (LOGDS)
         full = true;
@@ -1743,76 +1744,88 @@ uint16_t CMonitor::isDSBlocked(bool full) {
     if (*PDIRECTSCANOUT == 0) {
         reasons |= DS_BLOCK_USER;
         if (!full)
-            return reasons;
+            earlyExit = true;
     }
 
-    if (*PDIRECTSCANOUT == 2) {
+    if (!earlyExit && *PDIRECTSCANOUT == 2) {
         if (!m_activeWorkspace || !m_activeWorkspace->m_hasFullscreenWindow || m_activeWorkspace->m_fullscreenMode != FSMODE_FULLSCREEN) {
             reasons |= DS_BLOCK_WINDOWED;
             if (!full)
-                return reasons;
+                earlyExit = true;
         } else if (m_activeWorkspace->getFullscreenWindow()->getContentType() != CONTENT_TYPE_GAME) {
             reasons |= DS_BLOCK_CONTENT;
             if (!full)
-                return reasons;
+                earlyExit = true;
         }
     }
 
-    if (m_tearingState.activelyTearing) {
+    if (!earlyExit && m_tearingState.activelyTearing) {
         reasons |= DS_BLOCK_TEARING;
         if (!full)
-            return reasons;
+            earlyExit = true;
     }
 
-    if (!m_mirrors.empty() || isMirror()) {
+    if (!earlyExit && (!m_mirrors.empty() || isMirror())) {
         reasons |= DS_BLOCK_MIRROR;
         if (!full)
-            return reasons;
+            earlyExit = true;
     }
 
-    if (g_pHyprRenderer->m_directScanoutBlocked) {
+    if (!earlyExit && g_pHyprRenderer->m_directScanoutBlocked) {
         reasons |= DS_BLOCK_RECORD;
         if (!full)
-            return reasons;
+            earlyExit = true;
     }
 
-    if (g_pPointerManager->softwareLockedFor(m_self.lock())) {
+    if (!earlyExit && g_pPointerManager->softwareLockedFor(m_self.lock())) {
         reasons |= DS_BLOCK_SW;
         if (!full)
-            return reasons;
+            earlyExit = true;
     }
 
-    const auto PCANDIDATE = m_solitaryClient.lock();
-    if (!PCANDIDATE) {
-        reasons |= DS_BLOCK_CANDIDATE;
-        goto done;
+    PHLWINDOWREF              PCANDIDATE;
+    SP<CWLSurfaceResource>    PSURFACE;
+
+    if (!earlyExit) {
+        PCANDIDATE = m_solitaryClient.lock();
+        if (!PCANDIDATE) {
+            reasons |= DS_BLOCK_CANDIDATE;
+            earlyExit = true;
+        }
     }
 
-    const auto PSURFACE = PCANDIDATE->getSolitaryResource();
-    if (!PSURFACE || !PSURFACE->m_current.texture || !PSURFACE->m_current.buffer) {
-        reasons |= DS_BLOCK_SURFACE;
-        goto done;
+    if (!earlyExit) {
+        PSURFACE = PCANDIDATE->getSolitaryResource();
+        if (!PSURFACE || !PSURFACE->m_current.texture || !PSURFACE->m_current.buffer) {
+            reasons |= DS_BLOCK_SURFACE;
+            earlyExit = true;
+        }
     }
 
-    if (PSURFACE->m_current.bufferSize != m_pixelSize || PSURFACE->m_current.transform != m_transform) {
-        reasons |= DS_BLOCK_TRANSFORM;
-        if (!full)
-            return reasons;
+    if (!earlyExit) {
+        if (PSURFACE->m_current.bufferSize != m_pixelSize || PSURFACE->m_current.transform != m_transform) {
+            reasons |= DS_BLOCK_TRANSFORM;
+            if (!full)
+                earlyExit = true;
+        }
     }
 
-    // we can't scanout shm buffers.
-    const auto params = PSURFACE->m_current.buffer->dmabuf();
-    if (!params.success || !PSURFACE->m_current.texture->m_eglImage /* dmabuf */) {
-        reasons |= DS_BLOCK_DMA;
-        if (!full)
-            goto done;
+    if (!earlyExit) {
+        // we can't scanout shm buffers.
+        const auto params = PSURFACE->m_current.buffer->dmabuf();
+        if (!params.success || !PSURFACE->m_current.texture->m_eglImage /* dmabuf */) {
+            reasons |= DS_BLOCK_DMA;
+            if (!full)
+                earlyExit = true;
+        }
     }
 
-    const bool surfaceIsHDR = PSURFACE->m_colorManagement.valid() && (PSURFACE->m_colorManagement->isHDR() || PSURFACE->m_colorManagement->isWindowsScRGB());
-    if (needsCM() && *PNONSHADER != CM_NS_IGNORE && !canNoShaderCM() && ((inHDR() && (*PPASS == 0 || !surfaceIsHDR)) || (!inHDR() && (*PPASS != 1 || surfaceIsHDR))))
-        reasons |= DS_BLOCK_CM;
+    if (!earlyExit) {
+        const bool surfaceIsHDR = PSURFACE->m_colorManagement.valid() && (PSURFACE->m_colorManagement->isHDR() || PSURFACE->m_colorManagement->isWindowsScRGB());
+        if (needsCM() && *PNONSHADER != CM_NS_IGNORE && !canNoShaderCM() && ((inHDR() && (*PPASS == 0 || !surfaceIsHDR)) || (!inHDR() && (*PPASS != 1 || surfaceIsHDR))))
+            reasons |= DS_BLOCK_CM;
+    }
 
-done:
     if ((LOGDS && reasons != m_lastDSBlockReason) || FORCE_LOG) {
         std::string reasonStr;
         auto        appendReason = [&reasonStr](const char* name) {
