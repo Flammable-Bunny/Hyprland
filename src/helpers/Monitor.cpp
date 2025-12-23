@@ -1785,13 +1785,13 @@ uint16_t CMonitor::isDSBlocked(bool full) {
     const auto PCANDIDATE = m_solitaryClient.lock();
     if (!PCANDIDATE) {
         reasons |= DS_BLOCK_CANDIDATE;
-        return reasons;
+        goto done;
     }
 
     const auto PSURFACE = PCANDIDATE->getSolitaryResource();
     if (!PSURFACE || !PSURFACE->m_current.texture || !PSURFACE->m_current.buffer) {
         reasons |= DS_BLOCK_SURFACE;
-        return reasons;
+        goto done;
     }
 
     if (PSURFACE->m_current.bufferSize != m_pixelSize || PSURFACE->m_current.transform != m_transform) {
@@ -1805,13 +1805,14 @@ uint16_t CMonitor::isDSBlocked(bool full) {
     if (!params.success || !PSURFACE->m_current.texture->m_eglImage /* dmabuf */) {
         reasons |= DS_BLOCK_DMA;
         if (!full)
-            return reasons;
+            goto done;
     }
 
     const bool surfaceIsHDR = PSURFACE->m_colorManagement.valid() && (PSURFACE->m_colorManagement->isHDR() || PSURFACE->m_colorManagement->isWindowsScRGB());
     if (needsCM() && *PNONSHADER != CM_NS_IGNORE && !canNoShaderCM() && ((inHDR() && (*PPASS == 0 || !surfaceIsHDR)) || (!inHDR() && (*PPASS != 1 || surfaceIsHDR))))
         reasons |= DS_BLOCK_CM;
 
+done:
     if ((LOGDS && reasons != m_lastDSBlockReason) || FORCE_LOG) {
         std::string reasonStr;
         auto        appendReason = [&reasonStr](const char* name) {
@@ -1855,8 +1856,7 @@ uint16_t CMonitor::isDSBlocked(bool full) {
 
         Debug::log(LOG, "Direct scanout {} on {} (reasons: {})", reasons == DS_OK ? "allowed" : "blocked", m_name, reasonStr);
         m_lastDSBlockReason = reasons;
-        if (FORCE_LOG)
-            m_dsLogTimer.reset();
+        m_dsLogTimer.reset();
     }
 
     return reasons;
