@@ -3,6 +3,7 @@
 #include <hyprutils/string/String.hpp>
 #include <hyprutils/path/Path.hpp>
 #include <numbers>
+#include <cstdlib>
 #include <random>
 #include <pango/pangocairo.h>
 #include "OpenGL.hpp"
@@ -24,6 +25,7 @@
 #include "../managers/eventLoop/EventLoopManager.hpp"
 #include "../managers/CursorManager.hpp"
 #include "../helpers/fs/FsUtils.hpp"
+#include "../helpers/Format.hpp"
 #include "../helpers/MainLoopExecutor.hpp"
 #include "../i18n/Engine.hpp"
 #include "debug/HyprNotificationOverlay.hpp"
@@ -93,6 +95,16 @@ static const char* eglErrorToString(EGLint error) {
         case EGL_CONTEXT_LOST: return "EGL_CONTEXT_LOST";
     }
     return "Unknown";
+}
+
+static bool dmabufDebugEnabled() {
+    static bool cached = false;
+    static bool enabled = false;
+    if (!cached) {
+        enabled = getenv("HYPRLAND_DMABUF_LOG") != nullptr;
+        cached = true;
+    }
+    return enabled;
 }
 
 static void eglLog(EGLenum error, const char* command, EGLint type, EGLLabelKHR thread, EGLLabelKHR obj, const char* msg) {
@@ -606,6 +618,13 @@ EGLImageKHR CHyprOpenGLImpl::createEGLImage(const Aquamarine::SDMABUFAttrs& attr
         {EGL_DMA_BUF_PLANE2_FD_EXT, EGL_DMA_BUF_PLANE2_OFFSET_EXT, EGL_DMA_BUF_PLANE2_PITCH_EXT, EGL_DMA_BUF_PLANE2_MODIFIER_LO_EXT, EGL_DMA_BUF_PLANE2_MODIFIER_HI_EXT},
         {EGL_DMA_BUF_PLANE3_FD_EXT, EGL_DMA_BUF_PLANE3_OFFSET_EXT, EGL_DMA_BUF_PLANE3_PITCH_EXT, EGL_DMA_BUF_PLANE3_MODIFIER_LO_EXT, EGL_DMA_BUF_PLANE3_MODIFIER_HI_EXT}};
 
+    const bool debugDMABUF  = dmabufDebugEnabled();
+    const bool useModifiers = m_hasModifiers && attrs.modifier != DRM_FORMAT_MOD_INVALID;
+    bool       formatKnown  = true;
+    if (debugDMABUF) {
+        formatKnown = std::ranges::find_if(m_drmFormats, [fmt = attrs.format](const auto& entry) { return entry.drmFormat == fmt; }) != m_drmFormats.end();
+    }
+
     for (int i = 0; i < attrs.planes; ++i) {
         attribs[idx++] = attrNames[i].fd;
         attribs[idx++] = attrs.fds[i];
@@ -614,7 +633,7 @@ EGLImageKHR CHyprOpenGLImpl::createEGLImage(const Aquamarine::SDMABUFAttrs& attr
         attribs[idx++] = attrNames[i].pitch;
         attribs[idx++] = attrs.strides[i];
 
-        if (m_hasModifiers && attrs.modifier != DRM_FORMAT_MOD_INVALID) {
+        if (useModifiers) {
             attribs[idx++] = attrNames[i].modlo;
             attribs[idx++] = sc<uint32_t>(attrs.modifier & 0xFFFFFFFF);
             attribs[idx++] = attrNames[i].modhi;
@@ -630,7 +649,20 @@ EGLImageKHR CHyprOpenGLImpl::createEGLImage(const Aquamarine::SDMABUFAttrs& attr
 
     EGLImageKHR image = m_proc.eglCreateImageKHR(m_eglDisplay, EGL_NO_CONTEXT, EGL_LINUX_DMA_BUF_EXT, nullptr, attribs.data());
     if (image == EGL_NO_IMAGE_KHR) {
-        Debug::log(ERR, "EGL: EGLCreateImageKHR failed: {}", eglGetError());
+        const EGLint err = eglGetError();
+        Debug::log(ERR, "EGL: EGLCreateImageKHR failed: {} (0x{:x})", eglErrorToString(err), err);
+        if (debugDMABUF) {
+            Debug::log(ERR, "EGL: dmabuf attrs: {}x{}, fmt {} (0x{:x}), planes {}, modifier {} (0x{:x}), hasModifiers={}, useModifiers={}, crossGPU={}",
+                       attrs.size.x, attrs.size.y, NFormatUtils::drmFormatName(attrs.format), attrs.format, attrs.planes,
+                       NFormatUtils::drmModifierName(attrs.modifier), sc<uint64_t>(attrs.modifier), m_hasModifiers, useModifiers, attrs.crossGPU);
+            if (!formatKnown)
+                Debug::log(ERR, "EGL: dmabuf format 0x{:x} not advertised by EGL dmabuf formats", attrs.format);
+            if (attrs.modifier != DRM_FORMAT_MOD_INVALID && !m_hasModifiers)
+                Debug::log(ERR, "EGL: dmabuf has modifier but EGL reports no modifier support");
+            for (int i = 0; i < attrs.planes; ++i) {
+                Debug::log(ERR, "EGL: dmabuf plane {} fd {} offset {} stride {}", i, attrs.fds[i], attrs.offsets[i], attrs.strides[i]);
+            }
+        }
         return EGL_NO_IMAGE_KHR;
     }
 

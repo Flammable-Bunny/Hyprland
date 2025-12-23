@@ -36,6 +36,7 @@ CDMABuffer::CDMABuffer(uint32_t id, wl_client* client, Aquamarine::SDMABUFAttrs 
     const bool enableCPUFallback  = getenv("HYPRLAND_DMABUF_ENABLE_CPU_FALLBACK") != NULL;
     const bool disableCPUFallback = getenv("HYPRLAND_DMABUF_DISABLE_CPU_FALLBACK") != NULL;
     const bool allowCPUFallback   = enableCPUFallback && !disableCPUFallback;
+    const bool logDMABUF          = getenv("HYPRLAND_DMABUF_LOG") != NULL;
     if (m_attrs.crossGPU && g_pCompositor->m_secondaryDrmRenderNode.available && allowCPUFallback) {
         Debug::log(LOG, "CDMABuffer: Cross-GPU buffer detected, using CPU copy fallback (opt-in)");
 
@@ -62,12 +63,18 @@ CDMABuffer::CDMABuffer(uint32_t id, wl_client* client, Aquamarine::SDMABUFAttrs 
     auto eglImage = g_pHyprOpenGL->createEGLImage(m_attrs);
 
     if UNLIKELY (!eglImage) {
+        if (logDMABUF && m_attrs.modifier != DRM_FORMAT_MOD_INVALID) {
+            Debug::log(WARN, "CDMABuffer: dmabuf import failed with modifier {} (0x{:x}), retrying without modifier",
+                       NFormatUtils::drmModifierName(m_attrs.modifier), sc<uint64_t>(m_attrs.modifier));
+        }
         Debug::log(ERR, "CDMABuffer: failed to import EGLImage, retrying as implicit");
         m_attrs.modifier = DRM_FORMAT_MOD_INVALID;
         eglImage         = g_pHyprOpenGL->createEGLImage(m_attrs);
 
         if UNLIKELY (!eglImage) {
             Debug::log(ERR, "CDMABuffer: failed to import EGLImage");
+            if (logDMABUF)
+                Debug::log(ERR, "CDMABuffer: dmabuf import failed even without modifier");
             return;
         }
     }
