@@ -115,9 +115,17 @@ in {
   # Even though glaze itself disables it by default, nixpkgs sets ENABLE_SSL set to true.
   # Since we don't include openssl, the build failes without the `enableSSL = false;` override
   glaze = final: prev: {
-    glaze-hyprland = prev.glaze.override {
+    glaze-hyprland = (prev.glaze.override {
       enableSSL = false;
       enableInterop = false;
-    };
+    }).overrideAttrs (_old: {
+      version = "6.1.0";
+      src = final.fetchFromGitHub {
+        owner = "stephenberry";
+        repo = "glaze";
+        rev = "v6.1.0";
+        hash = lib.fakeHash;
+      };
+    });
   };
 }
