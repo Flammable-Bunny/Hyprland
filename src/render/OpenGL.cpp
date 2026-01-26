@@ -655,32 +655,33 @@ EGLImageKHR CHyprOpenGLImpl::createEGLImage(const Aquamarine::SDMABUFAttrs& attr
     EGLImageKHR image = m_proc.eglCreateImageKHR(m_eglDisplay, EGL_NO_CONTEXT, EGL_LINUX_DMA_BUF_EXT, nullptr, attribs.data());
     if (image == EGL_NO_IMAGE_KHR) {
         const EGLint err = eglGetError();
-        Debug::log(ERR, "EGL: EGLCreateImageKHR failed: {} (0x{:x})", eglErrorToString(err), err);
+        Log::logger->log(Log::ERR, "EGL: EGLCreateImageKHR failed: {} (0x{:x})", eglErrorToString(err), err);
         if (debugDMABUF) {
             const auto fmtIt = std::ranges::find_if(m_drmFormats, [fmt = attrs.format](const auto& entry) { return entry.drmFormat == fmt; });
-            Debug::log(ERR, "EGL: dmabuf attrs: {}x{}, fmt {} (0x{:x}), planes {}, modifier {} (0x{:x}), hasModifiers={}, useModifiers={}, crossGPU={}",
-                       attrs.size.x, attrs.size.y, NFormatUtils::drmFormatName(attrs.format), attrs.format, attrs.planes,
-                       NFormatUtils::drmModifierName(attrs.modifier), sc<uint64_t>(attrs.modifier), m_hasModifiers, useModifiers, attrs.crossGPU);
+            Log::logger->log(Log::ERR,
+                             "EGL: dmabuf attrs: {}x{}, fmt {} (0x{:x}), planes {}, modifier {} (0x{:x}), hasModifiers={}, useModifiers={}, crossGPU={}",
+                             attrs.size.x, attrs.size.y, NFormatUtils::drmFormatName(attrs.format), attrs.format, attrs.planes,
+                             NFormatUtils::drmModifierName(attrs.modifier), sc<uint64_t>(attrs.modifier), m_hasModifiers, useModifiers, attrs.crossGPU);
             if (fmtIt == m_drmFormats.end())
-                Debug::log(ERR, "EGL: dmabuf format 0x{:x} not advertised by EGL dmabuf formats", attrs.format);
+                Log::logger->log(Log::ERR, "EGL: dmabuf format 0x{:x} not advertised by EGL dmabuf formats", attrs.format);
             if (fmtIt != m_drmFormats.end() && useModifiers) {
                 const auto& mods = fmtIt->modifiers;
                 const bool  modSupported = std::ranges::find(mods, attrs.modifier) != mods.end();
                 if (!modSupported) {
-                    Debug::log(ERR, "EGL: dmabuf modifier {} (0x{:x}) not in EGL modifier list ({} modifiers)",
-                               NFormatUtils::drmModifierName(attrs.modifier), sc<uint64_t>(attrs.modifier), mods.size());
+                    Log::logger->log(Log::ERR, "EGL: dmabuf modifier {} (0x{:x}) not in EGL modifier list ({} modifiers)",
+                                     NFormatUtils::drmModifierName(attrs.modifier), sc<uint64_t>(attrs.modifier), mods.size());
                     const size_t maxMods = 8;
                     for (size_t i = 0; i < std::min(mods.size(), maxMods); ++i) {
-                        Debug::log(ERR, "EGL: | modifier {} (0x{:x})", NFormatUtils::drmModifierName(mods[i]), sc<uint64_t>(mods[i]));
+                        Log::logger->log(Log::ERR, "EGL: | modifier {} (0x{:x})", NFormatUtils::drmModifierName(mods[i]), sc<uint64_t>(mods[i]));
                     }
                     if (mods.size() > maxMods)
-                        Debug::log(ERR, "EGL: | ... {} more modifiers", mods.size() - maxMods);
+                        Log::logger->log(Log::ERR, "EGL: | ... {} more modifiers", mods.size() - maxMods);
                 }
             }
             if (attrs.modifier != DRM_FORMAT_MOD_INVALID && !m_hasModifiers)
-                Debug::log(ERR, "EGL: dmabuf has modifier but EGL reports no modifier support");
+                Log::logger->log(Log::ERR, "EGL: dmabuf has modifier but EGL reports no modifier support");
             for (int i = 0; i < attrs.planes; ++i) {
-                Debug::log(ERR, "EGL: dmabuf plane {} fd {} offset {} stride {}", i, attrs.fds[i], attrs.offsets[i], attrs.strides[i]);
+                Log::logger->log(Log::ERR, "EGL: dmabuf plane {} fd {} offset {} stride {}", i, attrs.fds[i], attrs.offsets[i], attrs.strides[i]);
             }
         }
         return EGL_NO_IMAGE_KHR;

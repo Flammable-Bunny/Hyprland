@@ -1882,7 +1882,7 @@ uint16_t CMonitor::isDSBlocked(bool full) {
                 appendReason("cm");
         }
 
-        Debug::log(LOG, "Direct scanout {} on {} (reasons: {})", reasons == DS_OK ? "allowed" : "blocked", m_name, reasonStr);
+        Log::logger->log(Log::DEBUG, "Direct scanout {} on {} (reasons: {})", reasons == DS_OK ? "allowed" : "blocked", m_name, reasonStr);
         m_lastDSBlockReason = reasons;
         m_dsLogTimer.reset();
     }

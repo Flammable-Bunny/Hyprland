@@ -907,8 +907,8 @@ CConfigManager::CConfigManager() {
     if (!g_pCompositor->m_onlyConfigVerification) {
         const auto disableLogs = std::any_cast<Hyprlang::INT>(m_config->getConfigValue("debug:disable_logs"));
         if (disableLogs) {
-            Debug::log(
-                INFO,
+            Log::logger->log(
+                Log::INFO,
                 "!!!!HEY YOU, YES YOU!!!!: further logs to stdout / logfile are disabled by default. BEFORE SENDING THIS LOG, ENABLE THEM. Use debug:disable_logs = false to do so: "
                 "https://wiki.hypr.land/Configuring/Variables/#debug");
         }

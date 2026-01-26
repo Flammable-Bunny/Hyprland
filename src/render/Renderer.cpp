@@ -1310,7 +1310,7 @@ void CHyprRenderer::renderMonitor(PHLMONITOR pMonitor, bool commit) {
 
     if (!pMonitor->m_output->needsFrame && pMonitor->m_forceFullFrames == 0) {
         if (pMonitor->m_dsSkipLogTimer.getMillis() >= 1000.F) {
-            Debug::log(LOG, "direct scanout: skipped render on {} (needsFrame=0 forceFullFrames=0)", pMonitor->m_name);
+            Log::logger->log(Log::DEBUG, "direct scanout: skipped render on {} (needsFrame=0 forceFullFrames=0)", pMonitor->m_name);
             pMonitor->isDSBlocked(true);
             pMonitor->m_dsSkipLogTimer.reset();
         }

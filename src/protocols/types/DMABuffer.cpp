@@ -38,7 +38,7 @@ CDMABuffer::CDMABuffer(uint32_t id, wl_client* client, Aquamarine::SDMABUFAttrs 
     const bool allowCPUFallback   = enableCPUFallback && !disableCPUFallback;
     const bool logDMABUF          = getenv("HYPRLAND_DMABUF_LOG") != NULL;
     if (m_attrs.crossGPU && g_pCompositor->m_secondaryDrmRenderNode.available && allowCPUFallback) {
-        Debug::log(LOG, "CDMABuffer: Cross-GPU buffer detected, using CPU copy fallback (opt-in)");
+        Log::logger->log(Log::DEBUG, "CDMABuffer: Cross-GPU buffer detected, using CPU copy fallback (opt-in)");
 
         // For cross-GPU, try CPU copy path:
         // 1. Map the dmabuf via mmap (dmabufs can often be mmap'd directly)
@@ -46,35 +46,35 @@ CDMABuffer::CDMABuffer(uint32_t id, wl_client* client, Aquamarine::SDMABUFAttrs 
         // This is slower but works across different GPU vendors
 
         if (!createCrossGPUTexture()) {
-            Debug::log(ERR, "CDMABuffer: Cross-GPU fallback failed, trying EGLImage anyway");
+            Log::logger->log(Log::ERR, "CDMABuffer: Cross-GPU fallback failed, trying EGLImage anyway");
             // Fall through to try EGLImage as last resort
         } else {
             m_opaque  = NFormatUtils::isFormatOpaque(m_attrs.format);
             m_success = m_texture && m_texture->m_texID;
             if (m_success) {
-                Debug::log(LOG, "CDMABuffer: Cross-GPU texture created successfully via CPU copy");
+                Log::logger->log(Log::DEBUG, "CDMABuffer: Cross-GPU texture created successfully via CPU copy");
                 return;
             }
         }
     } else if (m_attrs.crossGPU && g_pCompositor->m_secondaryDrmRenderNode.available && !allowCPUFallback) {
-        Debug::log(LOG, "CDMABuffer: Cross-GPU buffer detected, CPU fallback disabled; trying EGL import");
+        Log::logger->log(Log::DEBUG, "CDMABuffer: Cross-GPU buffer detected, CPU fallback disabled; trying EGL import");
     }
 
     auto eglImage = g_pHyprOpenGL->createEGLImage(m_attrs);
 
     if UNLIKELY (!eglImage) {
         if (logDMABUF && m_attrs.modifier != DRM_FORMAT_MOD_INVALID) {
-            Debug::log(WARN, "CDMABuffer: dmabuf import failed with modifier {} (0x{:x}), retrying without modifier",
-                       NFormatUtils::drmModifierName(m_attrs.modifier), sc<uint64_t>(m_attrs.modifier));
+            Log::logger->log(Log::WARN, "CDMABuffer: dmabuf import failed with modifier {} (0x{:x}), retrying without modifier",
+                             NFormatUtils::drmModifierName(m_attrs.modifier), sc<uint64_t>(m_attrs.modifier));
         }
-        Debug::log(ERR, "CDMABuffer: failed to import EGLImage, retrying as implicit");
+        Log::logger->log(Log::ERR, "CDMABuffer: failed to import EGLImage, retrying as implicit");
         m_attrs.modifier = DRM_FORMAT_MOD_INVALID;
         eglImage         = g_pHyprOpenGL->createEGLImage(m_attrs);
 
         if UNLIKELY (!eglImage) {
-            Debug::log(ERR, "CDMABuffer: failed to import EGLImage");
+            Log::logger->log(Log::ERR, "CDMABuffer: failed to import EGLImage");
             if (logDMABUF)
-                Debug::log(ERR, "CDMABuffer: dmabuf import failed even without modifier");
+                Log::logger->log(Log::ERR, "CDMABuffer: dmabuf import failed even without modifier");
             return;
         }
     }
@@ -215,7 +215,7 @@ bool CDMABuffer::createCrossGPUTexture() {
     return false;
 #else
     if (m_attrs.planes != 1) {
-        Debug::log(ERR, "Cross-GPU: Multi-plane buffers not yet supported");
+        Log::logger->log(Log::ERR, "Cross-GPU: Multi-plane buffers not yet supported");
         return false;
     }
 
@@ -223,7 +223,7 @@ bool CDMABuffer::createCrossGPUTexture() {
     // For simplicity, we assume a simple linear layout
     const size_t bufferSize = m_attrs.strides[0] * static_cast<size_t>(m_attrs.size.y);
     if (bufferSize == 0) {
-        Debug::log(ERR, "Cross-GPU: Invalid buffer size");
+        Log::logger->log(Log::ERR, "Cross-GPU: Invalid buffer size");
         return false;
     }
 
@@ -231,17 +231,17 @@ bool CDMABuffer::createCrossGPUTexture() {
     // This works for many drivers when the buffer uses a linear modifier
     void* mapped = mmap(nullptr, bufferSize, PROT_READ, MAP_SHARED, m_attrs.fds[0], m_attrs.offsets[0]);
     if (mapped == MAP_FAILED) {
-        Debug::log(ERR, "Cross-GPU: Failed to mmap dmabuf fd (errno: {}), trying DRM handle path", errno);
+        Log::logger->log(Log::ERR, "Cross-GPU: Failed to mmap dmabuf fd (errno: {}), trying DRM handle path", errno);
 
         // Fallback: try to map via DRM handle on the secondary device
         if (m_attrs.sourceDevice < 0) {
-            Debug::log(ERR, "Cross-GPU: No source device available for DRM handle mapping");
+            Log::logger->log(Log::ERR, "Cross-GPU: No source device available for DRM handle mapping");
             return false;
         }
 
         uint32_t handle = 0;
         if (drmPrimeFDToHandle(m_attrs.sourceDevice, m_attrs.fds[0], &handle) != 0) {
-            Debug::log(ERR, "Cross-GPU: drmPrimeFDToHandle failed");
+            Log::logger->log(Log::ERR, "Cross-GPU: drmPrimeFDToHandle failed");
             return false;
         }
 
@@ -255,7 +255,7 @@ bool CDMABuffer::createCrossGPUTexture() {
         };
 
         if (drmIoctl(m_attrs.sourceDevice, DRM_IOCTL_MODE_MAP_DUMB, &mapReq) != 0) {
-            Debug::log(ERR, "Cross-GPU: DRM_IOCTL_MODE_MAP_DUMB failed");
+            Log::logger->log(Log::ERR, "Cross-GPU: DRM_IOCTL_MODE_MAP_DUMB failed");
             drmCloseBufferHandle(m_attrs.sourceDevice, handle);
             return false;
         }
@@ -264,7 +264,7 @@ bool CDMABuffer::createCrossGPUTexture() {
         drmCloseBufferHandle(m_attrs.sourceDevice, handle);
 
         if (mapped == MAP_FAILED) {
-            Debug::log(ERR, "Cross-GPU: mmap via DRM handle failed");
+            Log::logger->log(Log::ERR, "Cross-GPU: mmap via DRM handle failed");
             return false;
         }
     }
@@ -295,11 +295,11 @@ bool CDMABuffer::createCrossGPUTexture() {
         case DRM_FORMAT_BGR888:
             // BGR888 is not directly supported in GLES, would need swizzling
             // Fall through to unsupported for now
-            Debug::log(ERR, "Cross-GPU: BGR888 format not supported in GLES");
+            Log::logger->log(Log::ERR, "Cross-GPU: BGR888 format not supported in GLES");
             munmap(mapped, bufferSize);
             return false;
         default:
-            Debug::log(ERR, "Cross-GPU: Unsupported DRM format 0x{:x}", m_attrs.format);
+            Log::logger->log(Log::ERR, "Cross-GPU: Unsupported DRM format 0x{:x}", m_attrs.format);
             munmap(mapped, bufferSize);
             return false;
     }
@@ -308,7 +308,7 @@ bool CDMABuffer::createCrossGPUTexture() {
     GLuint texID = 0;
     glGenTextures(1, &texID);
     if (texID == 0) {
-        Debug::log(ERR, "Cross-GPU: glGenTextures failed");
+        Log::logger->log(Log::ERR, "Cross-GPU: glGenTextures failed");
         munmap(mapped, bufferSize);
         return false;
     }
@@ -337,7 +337,7 @@ bool CDMABuffer::createCrossGPUTexture() {
     // Check for GL errors
     GLenum err = glGetError();
     if (err != GL_NO_ERROR) {
-        Debug::log(ERR, "Cross-GPU: GL error after texture upload: 0x{:x}", err);
+        Log::logger->log(Log::ERR, "Cross-GPU: GL error after texture upload: 0x{:x}", err);
         glDeleteTextures(1, &texID);
         return false;
     }
@@ -361,7 +361,7 @@ bool CDMABuffer::createCrossGPUTexture() {
             break;
     }
 
-    Debug::log(LOG, "Cross-GPU: Created texture {} ({}x{}) via CPU copy", texID, m_attrs.size.x, m_attrs.size.y);
+    Log::logger->log(Log::DEBUG, "Cross-GPU: Created texture {} ({}x{}) via CPU copy", texID, m_attrs.size.x, m_attrs.size.y);
     return true;
 #endif
 }

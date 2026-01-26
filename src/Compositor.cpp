@@ -408,7 +408,7 @@ void CCompositor::initServer(std::string socketName, int socketFd) {
                     const char* renderPath = devices[i]->nodes[DRM_NODE_RENDER];
                     int         fd = open(renderPath, O_RDWR | O_CLOEXEC);
                     if (fd < 0) {
-                        Debug::log(WARN, "Cross-GPU: Failed to open secondary render node {}", renderPath);
+                        Log::logger->log(Log::WARN, "Cross-GPU: Failed to open secondary render node {}", renderPath);
                         continue;
                     }
 
@@ -418,7 +418,7 @@ void CCompositor::initServer(std::string socketName, int socketFd) {
                         m_secondaryDrmRenderNode.fd = fd;
                         m_secondaryDrmRenderNode.device = statbuf.st_rdev;
                         m_secondaryDrmRenderNode.available = true;
-                        Debug::log(LOG, "Cross-GPU: Opened secondary render node {} (fd: {})", renderPath, fd);
+                        Log::logger->log(Log::DEBUG, "Cross-GPU: Opened secondary render node {} (fd: {})", renderPath, fd);
                         break; // Use first available secondary GPU
                     } else {
                         close(fd);
@@ -432,7 +432,7 @@ void CCompositor::initServer(std::string socketName, int socketFd) {
         }
 
         if (!m_secondaryDrmRenderNode.available)
-            Debug::log(LOG, "Cross-GPU: No secondary render node found (single GPU system or enumeration failed)");
+            Log::logger->log(Log::DEBUG, "Cross-GPU: No secondary render node found (single GPU system or enumeration failed)");
     }
 
     if (!socketName.empty() && socketFd != -1) {
@@ -856,7 +856,7 @@ void CCompositor::startCompositor() {
 
     EMIT_HOOK_EVENT("ready", nullptr);
     if (m_watchdogWriteFd.isValid())
-        write(m_watchdogWriteFd.get(), "vax", 3);
+        (void)write(m_watchdogWriteFd.get(), "vax", 3);
 
     // This blocks until we are done.
     Log::logger->log(Log::DEBUG, "Hyprland is ready, running the event loop!");
