@@ -33,24 +33,22 @@ namespace Desktop::Rule {
         void                                                        propertiesChanged(std::underlying_type_t<eRuleProperty> props);
         std::unordered_set<CWindowRuleEffectContainer::storageType> resetProps(std::underlying_type_t<eRuleProperty> props,
                                                                                Types::eOverridePriority              prio = Types::PRIORITY_WINDOW_RULE);
-        void                                                        readStaticRules();
-        void                                                        applyStaticRules();
+        void                                                        readStaticRules(bool preRead = false);
 
         // static props
         struct {
             std::string              monitor, workspace, group;
 
             std::optional<bool>      floating;
-
-            bool                     fullscreen     = false;
-            bool                     maximize       = false;
-            bool                     pseudo         = false;
-            bool                     pin            = false;
-            bool                     noInitialFocus = false;
+            std::optional<bool>      fullscreen;
+            std::optional<bool>      maximize;
+            std::optional<bool>      pseudo;
+            std::optional<bool>      pin;
+            std::optional<bool>      noInitialFocus;
+            std::optional<bool>      center;
 
             std::optional<int>       fullscreenStateClient;
             std::optional<int>       fullscreenStateInternal;
-            std::optional<int>       center;
             std::optional<int>       content;
             std::optional<int>       noCloseFor;
 

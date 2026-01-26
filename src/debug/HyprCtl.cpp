@@ -40,11 +40,12 @@ using namespace Hyprutils::OS;
 #include "../devices/ITouch.hpp"
 #include "../devices/Tablet.hpp"
 #include "../protocols/GlobalShortcuts.hpp"
-#include "debug/RollingLogFollow.hpp"
+#include "debug/log/RollingLogFollow.hpp"
 #include "config/ConfigManager.hpp"
 #include "helpers/MiscFunctions.hpp"
 #include "../desktop/view/LayerSurface.hpp"
 #include "../desktop/rule/Engine.hpp"
+#include "../desktop/history/WindowHistoryTracker.hpp"
 #include "../desktop/state/FocusState.hpp"
 #include "../version.h"
 
@@ -354,9 +355,10 @@ static std::string getGroupedData(PHLWINDOW w, eHyprCtlOutputFormat format) {
 
 std::string CHyprCtl::getWindowData(PHLWINDOW w, eHyprCtlOutputFormat format) {
     auto getFocusHistoryID = [](PHLWINDOW wnd) -> int {
-        for (size_t i = 0; i < Desktop::focusState()->windowHistory().size(); ++i) {
-            if (Desktop::focusState()->windowHistory()[i].lock() == wnd)
-                return i;
+        const auto& HISTORY = Desktop::History::windowTracker()->fullHistory();
+        for (size_t i = 0; i < HISTORY.size(); ++i) {
+            if (HISTORY[i].lock() == wnd)
+                return HISTORY.size() - i - 1; // reverse order for backwards compat
         }
         return -1;
     };
@@ -385,6 +387,7 @@ std::string CHyprCtl::getWindowData(PHLWINDOW w, eHyprCtlOutputFormat format) {
     "pinned": {},
     "fullscreen": {},
     "fullscreenClient": {},
+    "overFullscreen": {},
     "grouped": [{}],
     "tags": [{}],
     "swallowing": "0x{:x}",
@@ -399,7 +402,7 @@ std::string CHyprCtl::getWindowData(PHLWINDOW w, eHyprCtlOutputFormat format) {
             escapeJSONStrings(!w->m_workspace ? "" : w->m_workspace->m_name), (sc<int>(w->m_isFloating) == 1 ? "true" : "false"), (w->m_isPseudotiled ? "true" : "false"),
             w->monitorID(), escapeJSONStrings(w->m_class), escapeJSONStrings(w->m_title), escapeJSONStrings(w->m_initialClass), escapeJSONStrings(w->m_initialTitle), w->getPID(),
             (sc<int>(w->m_isX11) == 1 ? "true" : "false"), (w->m_pinned ? "true" : "false"), sc<uint8_t>(w->m_fullscreenState.internal), sc<uint8_t>(w->m_fullscreenState.client),
-            getGroupedData(w, format), getTagsData(w, format), rc<uintptr_t>(w->m_swallowed.get()), getFocusHistoryID(w),
+            (w->m_createdOverFullscreen ? "true" : "false"), getGroupedData(w, format), getTagsData(w, format), rc<uintptr_t>(w->m_swallowed.get()), getFocusHistoryID(w),
             (g_pInputManager->isWindowInhibiting(w, false) ? "true" : "false"), escapeJSONStrings(w->xdgTag().value_or("")), escapeJSONStrings(w->xdgDescription().value_or("")),
             escapeJSONStrings(NContentType::toString(w->getContentType())));
     } else {
@@ -407,14 +410,15 @@ std::string CHyprCtl::getWindowData(PHLWINDOW w, eHyprCtlOutputFormat format) {
             "Window {:x} -> {}:\n\tmapped: {}\n\thidden: {}\n\tat: {},{}\n\tsize: {},{}\n\tworkspace: {} ({})\n\tfloating: {}\n\tpseudo: {}\n\tmonitor: {}\n\tclass: {}\n\ttitle: "
             "{}\n\tinitialClass: {}\n\tinitialTitle: {}\n\tpid: "
             "{}\n\txwayland: {}\n\tpinned: "
-            "{}\n\tfullscreen: {}\n\tfullscreenClient: {}\n\tgrouped: {}\n\ttags: {}\n\tswallowing: {:x}\n\tfocusHistoryID: {}\n\tinhibitingIdle: {}\n\txdgTag: "
+            "{}\n\tfullscreen: {}\n\tfullscreenClient: {}\n\toverFullscreen: {}\n\tgrouped: {}\n\ttags: {}\n\tswallowing: {:x}\n\tfocusHistoryID: {}\n\tinhibitingIdle: "
+            "{}\n\txdgTag: "
             "{}\n\txdgDescription: {}\n\tcontentType: {}\n\n",
             rc<uintptr_t>(w.get()), w->m_title, sc<int>(w->m_isMapped), sc<int>(w->isHidden()), sc<int>(w->m_realPosition->goal().x), sc<int>(w->m_realPosition->goal().y),
             sc<int>(w->m_realSize->goal().x), sc<int>(w->m_realSize->goal().y), w->m_workspace ? w->workspaceID() : WORKSPACE_INVALID,
             (!w->m_workspace ? "" : w->m_workspace->m_name), sc<int>(w->m_isFloating), sc<int>(w->m_isPseudotiled), w->monitorID(), w->m_class, w->m_title, w->m_initialClass,
             w->m_initialTitle, w->getPID(), sc<int>(w->m_isX11), sc<int>(w->m_pinned), sc<uint8_t>(w->m_fullscreenState.internal), sc<uint8_t>(w->m_fullscreenState.client),
-            getGroupedData(w, format), getTagsData(w, format), rc<uintptr_t>(w->m_swallowed.get()), getFocusHistoryID(w), sc<int>(g_pInputManager->isWindowInhibiting(w, false)),
-            w->xdgTag().value_or(""), w->xdgDescription().value_or(""), NContentType::toString(w->getContentType()));
+            sc<int>(w->m_createdOverFullscreen), getGroupedData(w, format), getTagsData(w, format), rc<uintptr_t>(w->m_swallowed.get()), getFocusHistoryID(w),
+            sc<int>(g_pInputManager->isWindowInhibiting(w, false)), w->xdgTag().value_or(""), w->xdgDescription().value_or(""), NContentType::toString(w->getContentType()));
     }
 }
 
@@ -800,7 +804,7 @@ static std::string devicesRequest(eHyprCtlOutputFormat format, std::string reque
             result += std::format(
                 R"#(    {{
         "address": "0x{:x}",
-        "type": "tabletTool",
+        "type": "tabletTool"
     }},)#",
                 rc<uintptr_t>(d.get()));
         }
@@ -957,11 +961,10 @@ static std::string rollinglogRequest(eHyprCtlOutputFormat format, std::string re
 
     if (format == eHyprCtlOutputFormat::FORMAT_JSON) {
         result += "[\n\"log\":\"";
-        result += escapeJSONStrings(Debug::m_rollingLog);
+        result += escapeJSONStrings(Log::logger->rolling());
         result += "\"]";
-    } else {
-        result = Debug::m_rollingLog;
-    }
+    } else
+        result = Log::logger->rolling();
 
     return result;
 }
@@ -1067,7 +1070,7 @@ std::string versionRequest(eHyprCtlOutputFormat format, std::string request) {
         result += __hyprland_api_get_hash();
         result += "\n";
 
-#if (!ISDEBUG && !defined(NO_XWAYLAND))
+#if (!ISDEBUG && !defined(NO_XWAYLAND) && !defined(BUILT_WITH_NIX))
         result += "no flags were set\n";
 #else
         result += "flags set:\n";
@@ -1076,6 +1079,9 @@ std::string versionRequest(eHyprCtlOutputFormat format, std::string request) {
 #endif
 #ifdef NO_XWAYLAND
         result += "no xwayland\n";
+#endif
+#ifdef BUILT_WITH_NIX
+        result += "nix\n";
 #endif
 #endif
         return result;
@@ -1112,6 +1118,9 @@ std::string versionRequest(eHyprCtlOutputFormat format, std::string request) {
 #endif
 #ifdef NO_XWAYLAND
         result += "\"no xwayland\",";
+#endif
+#ifdef BUILT_WITH_NIX
+        result += "\"nix\",";
 #endif
 
         trimTrailingComma(result);
@@ -1254,7 +1263,7 @@ static std::string dispatchRequest(eHyprCtlOutputFormat format, std::string in) 
 
     SDispatchResult res = DISPATCHER->second(DISPATCHARG);
 
-    Debug::log(LOG, "Hyprctl: dispatcher {} : {}{}", DISPATCHSTR, DISPATCHARG, res.success ? "" : " -> " + res.error);
+    Log::logger->log(Log::DEBUG, "Hyprctl: dispatcher {} : {}{}", DISPATCHSTR, DISPATCHARG, res.success ? "" : " -> " + res.error);
 
     return res.success ? "ok" : res.error;
 }
@@ -1334,7 +1343,7 @@ static std::string dispatchKeyword(eHyprCtlOutputFormat format, std::string in) 
     if (COMMAND.contains("workspace"))
         g_pConfigManager->ensurePersistentWorkspacesPresent();
 
-    Debug::log(LOG, "Hyprctl: keyword {} : {}", COMMAND, VALUE);
+    Log::logger->log(Log::DEBUG, "Hyprctl: keyword {} : {}", COMMAND, VALUE);
 
     if (retval.empty())
         return "ok";
@@ -2217,23 +2226,23 @@ static bool successWrite(int fd, const std::string& data, bool needLog = true) {
         return true;
 
     if (needLog)
-        Debug::log(ERR, "Couldn't write to socket. Error: " + std::string(strerror(errno)));
+        Log::logger->log(Log::ERR, "Couldn't write to socket. Error: " + std::string(strerror(errno)));
 
     return false;
 }
 
 static void runWritingDebugLogThread(const int conn) {
     using namespace std::chrono_literals;
-    Debug::log(LOG, "In followlog thread, got connection, start writing: {}", conn);
+    Log::logger->log(Log::DEBUG, "In followlog thread, got connection, start writing: {}", conn);
     //will be finished, when reading side close connection
     std::thread([conn]() {
-        while (Debug::SRollingLogFollow::get().isRunning()) {
-            if (Debug::SRollingLogFollow::get().isEmpty(conn)) {
+        while (Log::SRollingLogFollow::get().isRunning()) {
+            if (Log::SRollingLogFollow::get().isEmpty(conn)) {
                 std::this_thread::sleep_for(1000ms);
                 continue;
             }
 
-            auto line = Debug::SRollingLogFollow::get().getLog(conn);
+            auto line = Log::SRollingLogFollow::get().getLog(conn);
             if (!successWrite(conn, line))
                 // We cannot write, when connection is closed. So thread will successfully exit by itself
                 break;
@@ -2241,7 +2250,7 @@ static void runWritingDebugLogThread(const int conn) {
             std::this_thread::sleep_for(100ms);
         }
         close(conn);
-        Debug::SRollingLogFollow::get().stopFor(conn);
+        Log::SRollingLogFollow::get().stopFor(conn);
     }).detach();
 }
 
@@ -2267,10 +2276,10 @@ static int hyprCtlFDTick(int fd, uint32_t mask, void* data) {
     CRED_T   creds;
     uint32_t len = sizeof(creds);
     if (getsockopt(ACCEPTEDCONNECTION, CRED_LVL, CRED_OPT, &creds, &len) == -1)
-        Debug::log(ERR, "Hyprctl: failed to get peer creds");
+        Log::logger->log(Log::ERR, "Hyprctl: failed to get peer creds");
     else {
         g_pHyprCtl->m_currentRequestParams.pid = creds.CRED_PID;
-        Debug::log(LOG, "Hyprctl: new connection from pid {}", creds.CRED_PID);
+        Log::logger->log(Log::DEBUG, "Hyprctl: new connection from pid {}", creds.CRED_PID);
     }
 
     //
@@ -2305,7 +2314,7 @@ static int hyprCtlFDTick(int fd, uint32_t mask, void* data) {
     try {
         reply = g_pHyprCtl->getReply(request);
     } catch (std::exception& e) {
-        Debug::log(ERR, "Error in request: {}", e.what());
+        Log::logger->log(Log::ERR, "Error in request: {}", e.what());
         reply = "Err: " + std::string(e.what());
     }
 
@@ -2325,10 +2334,10 @@ static int hyprCtlFDTick(int fd, uint32_t mask, void* data) {
         successWrite(ACCEPTEDCONNECTION, reply);
 
         if (isFollowUpRollingLogRequest(request)) {
-            Debug::log(LOG, "Followup rollinglog request received. Starting thread to write to socket.");
-            Debug::SRollingLogFollow::get().startFor(ACCEPTEDCONNECTION);
+            Log::logger->log(Log::DEBUG, "Followup rollinglog request received. Starting thread to write to socket.");
+            Log::SRollingLogFollow::get().startFor(ACCEPTEDCONNECTION);
             runWritingDebugLogThread(ACCEPTEDCONNECTION);
-            Debug::log(LOG, Debug::SRollingLogFollow::get().debugInfo());
+            Log::logger->log(Log::DEBUG, Log::SRollingLogFollow::get().debugInfo());
         } else
             close(ACCEPTEDCONNECTION);
 
@@ -2345,7 +2354,7 @@ void CHyprCtl::startHyprCtlSocket() {
     m_socketFD = CFileDescriptor{socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0)};
 
     if (!m_socketFD.isValid()) {
-        Debug::log(ERR, "Couldn't start the Hyprland Socket. (1) IPC will not work.");
+        Log::logger->log(Log::ERR, "Couldn't start the Hyprland Socket. (1) IPC will not work.");
         return;
     }
 
@@ -2356,14 +2365,14 @@ void CHyprCtl::startHyprCtlSocket() {
     snprintf(SERVERADDRESS.sun_path, sizeof(SERVERADDRESS.sun_path), "%s", m_socketPath.c_str());
 
     if (bind(m_socketFD.get(), rc<sockaddr*>(&SERVERADDRESS), SUN_LEN(&SERVERADDRESS)) < 0) {
-        Debug::log(ERR, "Couldn't start the Hyprland Socket. (2) IPC will not work.");
+        Log::logger->log(Log::ERR, "Couldn't start the Hyprland Socket. (2) IPC will not work.");
         return;
     }
 
     // 10 max queued.
     listen(m_socketFD.get(), 10);
 
-    Debug::log(LOG, "Hypr socket started at {}", m_socketPath);
+    Log::logger->log(Log::DEBUG, "Hypr socket started at {}", m_socketPath);
 
     m_eventSource = wl_event_loop_add_fd(g_pCompositor->m_wlEventLoop, m_socketFD.get(), WL_EVENT_READABLE, hyprCtlFDTick, nullptr);
 }

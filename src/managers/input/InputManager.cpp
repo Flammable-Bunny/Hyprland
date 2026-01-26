@@ -7,8 +7,7 @@
 #include <algorithm>
 #include "../../config/ConfigValue.hpp"
 #include "../../config/ConfigManager.hpp"
-#include "../../desktop/view/Window.hpp"
-#include "../../desktop/view/LayerSurface.hpp"
+#include "../../desktop/view/WLSurface.hpp"
 #include "../../desktop/state/FocusState.hpp"
 #include "../../protocols/CursorShape.hpp"
 #include "../../protocols/IdleInhibit.hpp"
@@ -57,7 +56,7 @@ CInputManager::CInputManager() {
         if (wl_resource_get_client(event.pMgr->resource()) != g_pSeatManager->m_state.pointerFocusResource->client())
             return;
 
-        Debug::log(LOG, "cursorImage request: shape {} -> {}", sc<uint32_t>(event.shape), event.shapeName);
+        Log::logger->log(Log::DEBUG, "cursorImage request: shape {} -> {}", sc<uint32_t>(event.shape), event.shapeName);
 
         m_cursorSurfaceInfo.wlSurface->unassign();
         m_cursorSurfaceInfo.vHotspot = {};
@@ -147,7 +146,8 @@ void CInputManager::onMouseMoved(IPointer::SMotionEvent e) {
 
     m_lastCursorMovement.reset();
 
-    m_lastInputTouch = false;
+    m_lastInputTouch  = false;
+    m_lastInputTablet = false;
 
     if (e.mouse)
         m_lastMousePos = getMouseCoordsInternal();
@@ -160,7 +160,8 @@ void CInputManager::onMouseWarp(IPointer::SMotionAbsoluteEvent e) {
 
     m_lastCursorMovement.reset();
 
-    m_lastInputTouch = false;
+    m_lastInputTouch  = false;
+    m_lastInputTablet = false;
 }
 
 void CInputManager::simulateMouseMovement() {
@@ -172,15 +173,29 @@ void CInputManager::sendMotionEventsToFocused() {
     if (!Desktop::focusState()->surface() || isConstrained())
         return;
 
-    // todo: this sucks ass
-    const auto PWINDOW = g_pCompositor->getWindowFromSurface(Desktop::focusState()->surface());
-    const auto PLS     = g_pCompositor->getLayerSurfaceFromSurface(Desktop::focusState()->surface());
+    const auto SURF = Desktop::focusState()->surface();
 
-    const auto LOCAL = getMouseCoordsInternal() - (PWINDOW ? PWINDOW->m_realPosition->goal() : (PLS ? Vector2D{PLS->m_geometry.x, PLS->m_geometry.y} : Vector2D{}));
+    if (!SURF)
+        return;
+
+    const auto HLSurf = Desktop::View::CWLSurface::fromResource(SURF);
+
+    if (!HLSurf || !HLSurf->view())
+        return;
+
+    const auto VIEW = HLSurf->view();
+
+    if (!VIEW->aliveAndVisible())
+        return;
+
+    const auto BOX = HLSurf->getSurfaceBoxGlobal();
+
+    if (!BOX)
+        return;
 
     m_emptyFocusCursorSet = false;
 
-    g_pSeatManager->setPointerFocus(Desktop::focusState()->surface(), LOCAL);
+    g_pSeatManager->setPointerFocus(Desktop::focusState()->surface(), m_lastCursorPosFloored - BOX->pos());
 }
 
 void CInputManager::mouseMoveUnified(uint32_t time, bool refocus, bool mouse, std::optional<Vector2D> overridePos) {
@@ -262,7 +277,8 @@ void CInputManager::mouseMoveUnified(uint32_t time, bool refocus, bool mouse, st
             return;
 
         } else
-            Debug::log(ERR, "BUG THIS: Null SURF/CONSTRAINT in mouse refocus. Ignoring constraints. {:x} {:x}", rc<uintptr_t>(SURF.get()), rc<uintptr_t>(CONSTRAINT.get()));
+            Log::logger->log(Log::ERR, "BUG THIS: Null SURF/CONSTRAINT in mouse refocus. Ignoring constraints. {:x} {:x}", rc<uintptr_t>(SURF.get()),
+                             rc<uintptr_t>(CONSTRAINT.get()));
     }
 
     if (PMONITOR != Desktop::focusState()->monitor() && (*PMOUSEFOCUSMON || refocus) && m_forcedFocus.expired())
@@ -337,12 +353,15 @@ void CInputManager::mouseMoveUnified(uint32_t time, bool refocus, bool mouse, st
                 const auto BOX = HLSurface->getSurfaceBoxGlobal();
 
                 if (BOX) {
-                    const auto PWINDOW = HLSurface->view()->type() == Desktop::View::VIEW_TYPE_WINDOW ? dynamicPointerCast<Desktop::View::CWindow>(HLSurface->view()) : nullptr;
+                    const auto PWINDOW = Desktop::View::CWindow::fromView(HLSurface->view());
+                    const auto LS      = Desktop::View::CLayerSurface::fromView(HLSurface->view());
                     surfacePos         = BOX->pos();
-                    pFoundLayerSurface =
-                        HLSurface->view()->type() == Desktop::View::VIEW_TYPE_LAYER_SURFACE ? dynamicPointerCast<Desktop::View::CLayerSurface>(HLSurface->view()) : nullptr;
-                    if (!pFoundLayerSurface)
-                        pFoundWindow = !PWINDOW || PWINDOW->isHidden() ? Desktop::focusState()->window() : PWINDOW;
+
+                    if (PWINDOW)
+                        pFoundWindow = PWINDOW;
+                    else if (LS)
+                        pFoundLayerSurface = LS;
+
                 } else // reset foundSurface, find one normally
                     foundSurface = nullptr;
             } else // reset foundSurface, find one normally
@@ -386,26 +405,35 @@ void CInputManager::mouseMoveUnified(uint32_t time, bool refocus, bool mouse, st
     // then, we check if the workspace doesn't have a fullscreen window
     const auto PWORKSPACE   = PMONITOR->m_activeSpecialWorkspace ? PMONITOR->m_activeSpecialWorkspace : PMONITOR->m_activeWorkspace;
     const auto PWINDOWIDEAL = g_pCompositor->vectorToWindowUnified(mouseCoords, Desktop::View::RESERVED_EXTENTS | Desktop::View::INPUT_EXTENTS | Desktop::View::ALLOW_FLOATING);
-    if (PWORKSPACE->m_hasFullscreenWindow && !foundSurface && PWORKSPACE->m_fullscreenMode == FSMODE_FULLSCREEN) {
-        pFoundWindow = PWORKSPACE->getFullscreenWindow();
+    if (PWORKSPACE->m_hasFullscreenWindow && PWORKSPACE->m_fullscreenMode == FSMODE_FULLSCREEN) {
+        const auto IS_LS_UNFOCUSABLE = pFoundLayerSurface &&
+            (pFoundLayerSurface->m_layer < ZWLR_LAYER_SHELL_V1_LAYER_TOP ||
+             (pFoundLayerSurface->m_layer == ZWLR_LAYER_SHELL_V1_LAYER_TOP && !pFoundLayerSurface->m_aboveFullscreen));
 
-        if (!pFoundWindow) {
-            // what the fuck, somehow happens occasionally??
-            PWORKSPACE->m_hasFullscreenWindow = false;
-            return;
-        }
+        if (IS_LS_UNFOCUSABLE) {
+            foundSurface       = nullptr;
+            pFoundLayerSurface = nullptr;
 
-        if (PWINDOWIDEAL &&
-            ((PWINDOWIDEAL->m_isFloating && (PWINDOWIDEAL->m_createdOverFullscreen || PWINDOWIDEAL->m_pinned)) /* floating over fullscreen or pinned */
-             || (PMONITOR->m_activeSpecialWorkspace == PWINDOWIDEAL->m_workspace) /* on an open special workspace */))
-            pFoundWindow = PWINDOWIDEAL;
+            pFoundWindow = PWORKSPACE->getFullscreenWindow();
 
-        if (!pFoundWindow->m_isX11) {
-            foundSurface = g_pCompositor->vectorWindowToSurface(mouseCoords, pFoundWindow, surfaceCoords);
-            surfacePos   = Vector2D(-1337, -1337);
-        } else {
-            foundSurface = pFoundWindow->wlSurface()->resource();
-            surfacePos   = pFoundWindow->m_realPosition->value();
+            if (!pFoundWindow) {
+                // what the fuck, somehow happens occasionally??
+                PWORKSPACE->m_hasFullscreenWindow = false;
+                return;
+            }
+
+            if (PWINDOWIDEAL &&
+                ((PWINDOWIDEAL->m_isFloating && (PWINDOWIDEAL->m_createdOverFullscreen || PWINDOWIDEAL->m_pinned)) /* floating over fullscreen or pinned */
+                 || (PMONITOR->m_activeSpecialWorkspace == PWINDOWIDEAL->m_workspace) /* on an open special workspace */))
+                pFoundWindow = PWINDOWIDEAL;
+
+            if (!pFoundWindow->m_isX11) {
+                foundSurface = g_pCompositor->vectorWindowToSurface(mouseCoords, pFoundWindow, surfaceCoords);
+                surfacePos   = Vector2D(-1337, -1337);
+            } else {
+                foundSurface = pFoundWindow->wlSurface()->resource();
+                surfacePos   = pFoundWindow->m_realPosition->value();
+            }
         }
     }
 
@@ -506,13 +534,6 @@ void CInputManager::mouseMoveUnified(uint32_t time, bool refocus, bool mouse, st
     m_emptyFocusCursorSet = false;
 
     Vector2D surfaceLocal = surfacePos == Vector2D(-1337, -1337) ? surfaceCoords : mouseCoords - surfacePos;
-
-    if (pFoundWindow && !pFoundWindow->m_isX11 && surfacePos != Vector2D(-1337, -1337)) {
-        // calc for oversized windows... fucking bullshit.
-        CBox geom = pFoundWindow->m_xdgSurface->m_current.geometry;
-
-        surfaceLocal = mouseCoords - surfacePos + geom.pos();
-    }
 
     if (pFoundWindow && pFoundWindow->m_isX11) // for x11 force scale zero
         surfaceLocal = surfaceLocal * pFoundWindow->m_X11SurfaceScaledBy;
@@ -658,7 +679,7 @@ void CInputManager::onMouseButton(IPointer::SButtonEvent e) {
 }
 
 void CInputManager::processMouseRequest(const CSeatManager::SSetCursorEvent& event) {
-    Debug::log(LOG, "cursorImage request: surface {:x}", rc<uintptr_t>(event.surf.get()));
+    Log::logger->log(Log::DEBUG, "cursorImage request: surface {:x}", rc<uintptr_t>(event.surf.get()));
 
     if (event.surf != m_cursorSurfaceInfo.wlSurface->resource()) {
         m_cursorSurfaceInfo.wlSurface->unassign();
@@ -707,13 +728,13 @@ eClickBehaviorMode CInputManager::getClickMode() {
 void CInputManager::setClickMode(eClickBehaviorMode mode) {
     switch (mode) {
         case CLICKMODE_DEFAULT:
-            Debug::log(LOG, "SetClickMode: DEFAULT");
+            Log::logger->log(Log::DEBUG, "SetClickMode: DEFAULT");
             m_clickBehavior = CLICKMODE_DEFAULT;
             g_pHyprRenderer->setCursorFromName("left_ptr", true);
             break;
 
         case CLICKMODE_KILL:
-            Debug::log(LOG, "SetClickMode: KILL");
+            Log::logger->log(Log::DEBUG, "SetClickMode: KILL");
             m_clickBehavior = CLICKMODE_KILL;
 
             // remove constraints
@@ -785,8 +806,10 @@ void CInputManager::processMouseDownNormal(const IPointer::SButtonEvent& e) {
 
             auto HLSurf = Desktop::View::CWLSurface::fromResource(g_pSeatManager->m_state.pointerFocus.lock());
 
-            if (HLSurf && HLSurf->view()->type() == Desktop::View::VIEW_TYPE_WINDOW)
-                g_pCompositor->changeWindowZOrder(dynamicPointerCast<Desktop::View::CWindow>(HLSurf->view()), true);
+            // pointerFocus can target a surface without a Desktop::View (e.g. IME popups), so view() may be null.
+            const auto PVIEW = HLSurf ? HLSurf->view() : nullptr;
+            if (PVIEW && PVIEW->type() == Desktop::View::VIEW_TYPE_WINDOW)
+                g_pCompositor->changeWindowZOrder(dynamicPointerCast<Desktop::View::CWindow>(PVIEW), true);
 
             break;
         }
@@ -813,7 +836,7 @@ void CInputManager::processMouseDownKill(const IPointer::SButtonEvent& e) {
                 g_pCompositor->vectorToWindowUnified(getMouseCoordsInternal(), Desktop::View::RESERVED_EXTENTS | Desktop::View::INPUT_EXTENTS | Desktop::View::ALLOW_FLOATING);
 
             if (!PWINDOW) {
-                Debug::log(ERR, "Cannot kill invalid window!");
+                Log::logger->log(Log::ERR, "Cannot kill invalid window!");
                 break;
             }
 
@@ -942,7 +965,7 @@ void CInputManager::newKeyboard(SP<IKeyboard> keeb) {
 
     setupKeyboard(PNEWKEYBOARD);
 
-    Debug::log(LOG, "New keyboard created, pointers Hypr: {:x}", rc<uintptr_t>(PNEWKEYBOARD.get()));
+    Log::logger->log(Log::DEBUG, "New keyboard created, pointers Hypr: {:x}", rc<uintptr_t>(PNEWKEYBOARD.get()));
 }
 
 void CInputManager::newKeyboard(SP<Aquamarine::IKeyboard> keyboard) {
@@ -950,7 +973,7 @@ void CInputManager::newKeyboard(SP<Aquamarine::IKeyboard> keyboard) {
 
     setupKeyboard(PNEWKEYBOARD);
 
-    Debug::log(LOG, "New keyboard created, pointers Hypr: {:x} and AQ: {:x}", rc<uintptr_t>(PNEWKEYBOARD.get()), rc<uintptr_t>(keyboard.get()));
+    Log::logger->log(Log::DEBUG, "New keyboard created, pointers Hypr: {:x} and AQ: {:x}", rc<uintptr_t>(PNEWKEYBOARD.get()), rc<uintptr_t>(keyboard.get()));
 }
 
 void CInputManager::newVirtualKeyboard(SP<CVirtualKeyboardV1Resource> keyboard) {
@@ -958,7 +981,7 @@ void CInputManager::newVirtualKeyboard(SP<CVirtualKeyboardV1Resource> keyboard) 
 
     setupKeyboard(PNEWKEYBOARD);
 
-    Debug::log(LOG, "New virtual keyboard created at {:x}", rc<uintptr_t>(PNEWKEYBOARD.get()));
+    Log::logger->log(Log::DEBUG, "New virtual keyboard created at {:x}", rc<uintptr_t>(PNEWKEYBOARD.get()));
 }
 
 void CInputManager::setupKeyboard(SP<IKeyboard> keeb) {
@@ -969,7 +992,7 @@ void CInputManager::setupKeyboard(SP<IKeyboard> keeb) {
     try {
         keeb->m_hlName = getNameForNewDevice(keeb->m_deviceName);
     } catch (std::exception& e) {
-        Debug::log(ERR, "Keyboard had no name???"); // logic error
+        Log::logger->log(Log::ERR, "Keyboard had no name???"); // logic error
     }
 
     keeb->m_events.destroy.listenStatic([this, keeb = keeb.get()] {
@@ -979,7 +1002,7 @@ void CInputManager::setupKeyboard(SP<IKeyboard> keeb) {
             return;
 
         destroyKeyboard(PKEEB);
-        Debug::log(LOG, "Destroyed keyboard {:x}", rc<uintptr_t>(keeb));
+        Log::logger->log(Log::DEBUG, "Destroyed keyboard {:x}", rc<uintptr_t>(keeb));
     });
 
     keeb->m_keyboardEvents.key.listenStatic([this, keeb = keeb.get()](const IKeyboard::SKeyEvent& event) {
@@ -1044,7 +1067,7 @@ void CInputManager::applyConfigToKeyboard(SP<IKeyboard> pKeyboard) {
 
     const auto HASCONFIG = g_pConfigManager->deviceConfigExists(devname);
 
-    Debug::log(LOG, "ApplyConfigToKeyboard for \"{}\", hasconfig: {}", devname, sc<int>(HASCONFIG));
+    Log::logger->log(Log::DEBUG, "ApplyConfigToKeyboard for \"{}\", hasconfig: {}", devname, sc<int>(HASCONFIG));
 
     const auto REPEATRATE  = g_pConfigManager->getDeviceInt(devname, "repeat_rate", "input:repeat_rate");
     const auto REPEATDELAY = g_pConfigManager->getDeviceInt(devname, "repeat_delay", "input:repeat_delay");
@@ -1067,14 +1090,19 @@ void CInputManager::applyConfigToKeyboard(SP<IKeyboard> pKeyboard) {
     pKeyboard->m_allowBinds        = ALLOWBINDS;
 
     const auto PERM = g_pDynamicPermissionManager->clientPermissionModeWithString(-1, pKeyboard->m_hlName, PERMISSION_TYPE_KEYBOARD);
+
     if (PERM == PERMISSION_RULE_ALLOW_MODE_PENDING) {
+
+        // disallow while pending
+        pKeyboard->m_allowed = false;
+
         const auto PROMISE = g_pDynamicPermissionManager->promiseFor(-1, pKeyboard->m_hlName, PERMISSION_TYPE_KEYBOARD);
         if (!PROMISE)
-            Debug::log(ERR, "BUG THIS: No promise for client permission for keyboard");
+            Log::logger->log(Log::ERR, "BUG THIS: No promise for client permission for keyboard");
         else {
             PROMISE->then([k = WP<IKeyboard>{pKeyboard}](SP<CPromiseResult<eDynamicPermissionAllowMode>> r) {
                 if (r->hasError()) {
-                    Debug::log(ERR, "BUG THIS: No permission returned for keyboard");
+                    Log::logger->log(Log::ERR, "BUG THIS: No permission returned for keyboard");
                     return;
                 }
 
@@ -1091,7 +1119,7 @@ void CInputManager::applyConfigToKeyboard(SP<IKeyboard> pKeyboard) {
         if (NUMLOCKON == pKeyboard->m_numlockOn && REPEATDELAY == pKeyboard->m_repeatDelay && REPEATRATE == pKeyboard->m_repeatRate && RULES == pKeyboard->m_currentRules.rules &&
             MODEL == pKeyboard->m_currentRules.model && LAYOUT == pKeyboard->m_currentRules.layout && VARIANT == pKeyboard->m_currentRules.variant &&
             OPTIONS == pKeyboard->m_currentRules.options && FILEPATH == pKeyboard->m_xkbFilePath) {
-            Debug::log(LOG, "Not applying config to keyboard, it did not change.");
+            Log::logger->log(Log::DEBUG, "Not applying config to keyboard, it did not change.");
             return;
         }
     } catch (std::exception& e) {
@@ -1110,8 +1138,8 @@ void CInputManager::applyConfigToKeyboard(SP<IKeyboard> pKeyboard) {
     g_pEventManager->postEvent(SHyprIPCEvent{"activelayout", pKeyboard->m_hlName + "," + LAYOUTSTR});
     EMIT_HOOK_EVENT("activeLayout", (std::vector<std::any>{pKeyboard, LAYOUTSTR}));
 
-    Debug::log(LOG, "Set the keyboard layout to {} and variant to {} for keyboard \"{}\"", pKeyboard->m_currentRules.layout, pKeyboard->m_currentRules.variant,
-               pKeyboard->m_hlName);
+    Log::logger->log(Log::DEBUG, "Set the keyboard layout to {} and variant to {} for keyboard \"{}\"", pKeyboard->m_currentRules.layout, pKeyboard->m_currentRules.variant,
+                     pKeyboard->m_hlName);
 }
 
 void CInputManager::newVirtualMouse(SP<CVirtualPointerV1Resource> mouse) {
@@ -1119,7 +1147,7 @@ void CInputManager::newVirtualMouse(SP<CVirtualPointerV1Resource> mouse) {
 
     setupMouse(PMOUSE);
 
-    Debug::log(LOG, "New virtual mouse created");
+    Log::logger->log(Log::DEBUG, "New virtual mouse created");
 }
 
 void CInputManager::newMouse(SP<IPointer> mouse) {
@@ -1127,7 +1155,7 @@ void CInputManager::newMouse(SP<IPointer> mouse) {
 
     setupMouse(mouse);
 
-    Debug::log(LOG, "New mouse created, pointer Hypr: {:x}", rc<uintptr_t>(mouse.get()));
+    Log::logger->log(Log::DEBUG, "New mouse created, pointer Hypr: {:x}", rc<uintptr_t>(mouse.get()));
 }
 
 void CInputManager::newMouse(SP<Aquamarine::IPointer> mouse) {
@@ -1135,7 +1163,7 @@ void CInputManager::newMouse(SP<Aquamarine::IPointer> mouse) {
 
     setupMouse(PMOUSE);
 
-    Debug::log(LOG, "New mouse created, pointer AQ: {:x}", rc<uintptr_t>(mouse.get()));
+    Log::logger->log(Log::DEBUG, "New mouse created, pointer AQ: {:x}", rc<uintptr_t>(mouse.get()));
 }
 
 void CInputManager::setupMouse(SP<IPointer> mauz) {
@@ -1144,15 +1172,15 @@ void CInputManager::setupMouse(SP<IPointer> mauz) {
     try {
         mauz->m_hlName = getNameForNewDevice(mauz->m_deviceName);
     } catch (std::exception& e) {
-        Debug::log(ERR, "Mouse had no name???"); // logic error
+        Log::logger->log(Log::ERR, "Mouse had no name???"); // logic error
     }
 
     if (mauz->aq() && mauz->aq()->getLibinputHandle()) {
         const auto LIBINPUTDEV = mauz->aq()->getLibinputHandle();
 
-        Debug::log(LOG, "New mouse has libinput sens {:.2f} ({:.2f}) with accel profile {} ({})", libinput_device_config_accel_get_speed(LIBINPUTDEV),
-                   libinput_device_config_accel_get_default_speed(LIBINPUTDEV), sc<int>(libinput_device_config_accel_get_profile(LIBINPUTDEV)),
-                   sc<int>(libinput_device_config_accel_get_default_profile(LIBINPUTDEV)));
+        Log::logger->log(Log::DEBUG, "New mouse has libinput sens {:.2f} ({:.2f}) with accel profile {} ({})", libinput_device_config_accel_get_speed(LIBINPUTDEV),
+                         libinput_device_config_accel_get_default_speed(LIBINPUTDEV), sc<int>(libinput_device_config_accel_get_profile(LIBINPUTDEV)),
+                         sc<int>(libinput_device_config_accel_get_default_profile(LIBINPUTDEV)));
     }
 
     g_pPointerManager->attachPointer(mauz);
@@ -1219,7 +1247,7 @@ void CInputManager::setPointerConfigs() {
                 else if (TAP_MAP == "lmr")
                     libinput_device_config_tap_set_button_map(LIBINPUTDEV, LIBINPUT_CONFIG_TAP_MAP_LMR);
                 else
-                    Debug::log(WARN, "Tap button mapping unknown");
+                    Log::logger->log(Log::WARN, "Tap button mapping unknown");
             }
 
             const auto SCROLLMETHOD = g_pConfigManager->getDeviceString(devname, "scroll_method", "input:scroll_method");
@@ -1234,7 +1262,7 @@ void CInputManager::setPointerConfigs() {
             } else if (SCROLLMETHOD == "on_button_down") {
                 libinput_device_config_scroll_set_method(LIBINPUTDEV, LIBINPUT_CONFIG_SCROLL_ON_BUTTON_DOWN);
             } else {
-                Debug::log(WARN, "Scroll method unknown");
+                Log::logger->log(Log::WARN, "Scroll method unknown");
             }
 
             if (g_pConfigManager->getDeviceInt(devname, "tap-and-drag", "input:touchpad:tap-and-drag") == 0)
@@ -1313,15 +1341,15 @@ void CInputManager::setPointerConfigs() {
                             }
 
                             libinput_config_accel_set_points(CONFIG, LIBINPUT_ACCEL_TYPE_SCROLL, scrollStep, scrollPoints.size(), scrollPoints.data());
-                        } catch (std::exception& e) { Debug::log(ERR, "Invalid values in scroll_points"); }
+                        } catch (std::exception& e) { Log::logger->log(Log::ERR, "Invalid values in scroll_points"); }
                     }
 
                     libinput_config_accel_set_points(CONFIG, LIBINPUT_ACCEL_TYPE_MOTION, accelStep, accelPoints.size(), accelPoints.data());
                     libinput_device_config_accel_apply(LIBINPUTDEV, CONFIG);
                     libinput_config_accel_destroy(CONFIG);
-                } catch (std::exception& e) { Debug::log(ERR, "Invalid values in custom accel profile"); }
+                } catch (std::exception& e) { Log::logger->log(Log::ERR, "Invalid values in custom accel profile"); }
             } else {
-                Debug::log(WARN, "Unknown acceleration profile, falling back to default");
+                Log::logger->log(Log::WARN, "Unknown acceleration profile, falling back to default");
             }
 
             const auto SCROLLBUTTON = g_pConfigManager->getDeviceInt(devname, "scroll_button", "input:scroll_button");
@@ -1333,7 +1361,7 @@ void CInputManager::setPointerConfigs() {
             libinput_device_config_scroll_set_button_lock(LIBINPUTDEV,
                                                           SCROLLBUTTONLOCK == 0 ? LIBINPUT_CONFIG_SCROLL_BUTTON_LOCK_DISABLED : LIBINPUT_CONFIG_SCROLL_BUTTON_LOCK_ENABLED);
 
-            Debug::log(LOG, "Applied config to mouse {}, sens {:.2f}", m->m_hlName, LIBINPUTSENS);
+            Log::logger->log(Log::DEBUG, "Applied config to mouse {}, sens {:.2f}", m->m_hlName, LIBINPUTSENS);
         }
     }
 }
@@ -1344,7 +1372,7 @@ static void removeFromHIDs(WP<IHID> hid) {
 }
 
 void CInputManager::destroyKeyboard(SP<IKeyboard> pKeyboard) {
-    Debug::log(LOG, "Keyboard at {:x} removed", rc<uintptr_t>(pKeyboard.get()));
+    Log::logger->log(Log::DEBUG, "Keyboard at {:x} removed", rc<uintptr_t>(pKeyboard.get()));
 
     std::erase_if(m_keyboards, [pKeyboard](const auto& other) { return other == pKeyboard; });
 
@@ -1368,7 +1396,7 @@ void CInputManager::destroyKeyboard(SP<IKeyboard> pKeyboard) {
 }
 
 void CInputManager::destroyPointer(SP<IPointer> mouse) {
-    Debug::log(LOG, "Pointer at {:x} removed", rc<uintptr_t>(mouse.get()));
+    Log::logger->log(Log::DEBUG, "Pointer at {:x} removed", rc<uintptr_t>(mouse.get()));
 
     std::erase_if(m_pointers, [mouse](const auto& other) { return other == mouse; });
 
@@ -1381,7 +1409,7 @@ void CInputManager::destroyPointer(SP<IPointer> mouse) {
 }
 
 void CInputManager::destroyTouchDevice(SP<ITouch> touch) {
-    Debug::log(LOG, "Touch device at {:x} removed", rc<uintptr_t>(touch.get()));
+    Log::logger->log(Log::DEBUG, "Touch device at {:x} removed", rc<uintptr_t>(touch.get()));
 
     std::erase_if(m_touches, [touch](const auto& other) { return other == touch; });
 
@@ -1389,7 +1417,7 @@ void CInputManager::destroyTouchDevice(SP<ITouch> touch) {
 }
 
 void CInputManager::destroyTablet(SP<CTablet> tablet) {
-    Debug::log(LOG, "Tablet device at {:x} removed", rc<uintptr_t>(tablet.get()));
+    Log::logger->log(Log::DEBUG, "Tablet device at {:x} removed", rc<uintptr_t>(tablet.get()));
 
     std::erase_if(m_tablets, [tablet](const auto& other) { return other == tablet; });
 
@@ -1397,7 +1425,7 @@ void CInputManager::destroyTablet(SP<CTablet> tablet) {
 }
 
 void CInputManager::destroyTabletTool(SP<CTabletTool> tool) {
-    Debug::log(LOG, "Tablet tool at {:x} removed", rc<uintptr_t>(tool.get()));
+    Log::logger->log(Log::DEBUG, "Tablet tool at {:x} removed", rc<uintptr_t>(tool.get()));
 
     std::erase_if(m_tabletTools, [tool](const auto& other) { return other == tool; });
 
@@ -1405,7 +1433,7 @@ void CInputManager::destroyTabletTool(SP<CTabletTool> tool) {
 }
 
 void CInputManager::destroyTabletPad(SP<CTabletPad> pad) {
-    Debug::log(LOG, "Tablet pad at {:x} removed", rc<uintptr_t>(pad.get()));
+    Log::logger->log(Log::DEBUG, "Tablet pad at {:x} removed", rc<uintptr_t>(pad.get()));
 
     std::erase_if(m_tabletPads, [pad](const auto& other) { return other == pad; });
 
@@ -1523,7 +1551,7 @@ void CInputManager::onKeyboardMod(SP<IKeyboard> pKeyboard) {
 
         const auto LAYOUT = pKeyboard->getActiveLayout();
 
-        Debug::log(LOG, "LAYOUT CHANGED TO {} GROUP {}", LAYOUT, MODS.group);
+        Log::logger->log(Log::DEBUG, "LAYOUT CHANGED TO {} GROUP {}", LAYOUT, MODS.group);
 
         g_pEventManager->postEvent(SHyprIPCEvent{"activelayout", pKeyboard->m_hlName + "," + LAYOUT});
         EMIT_HOOK_EVENT("activeLayout", (std::vector<std::any>{pKeyboard, LAYOUT}));
@@ -1553,7 +1581,7 @@ void CInputManager::refocus(std::optional<Vector2D> overridePos) {
 
 bool CInputManager::refocusLastWindow(PHLMONITOR pMonitor) {
     if (!m_exclusiveLSes.empty()) {
-        Debug::log(LOG, "CInputManager::refocusLastWindow: ignoring, exclusive LS present.");
+        Log::logger->log(Log::DEBUG, "CInputManager::refocusLastWindow: ignoring, exclusive LS present.");
         return false;
     }
 
@@ -1717,7 +1745,7 @@ void CInputManager::newTouchDevice(SP<Aquamarine::ITouch> pDevice) {
     try {
         PNEWDEV->m_hlName = getNameForNewDevice(PNEWDEV->m_deviceName);
     } catch (std::exception& e) {
-        Debug::log(ERR, "Touch Device had no name???"); // logic error
+        Log::logger->log(Log::ERR, "Touch Device had no name???"); // logic error
     }
 
     setTouchDeviceConfigs(PNEWDEV);
@@ -1732,7 +1760,7 @@ void CInputManager::newTouchDevice(SP<Aquamarine::ITouch> pDevice) {
         destroyTouchDevice(PDEV);
     });
 
-    Debug::log(LOG, "New touch device added at {:x}", rc<uintptr_t>(PNEWDEV.get()));
+    Log::logger->log(Log::DEBUG, "New touch device added at {:x}", rc<uintptr_t>(PNEWDEV.get()));
 }
 
 void CInputManager::setTouchDeviceConfigs(SP<ITouch> dev) {
@@ -1746,7 +1774,7 @@ void CInputManager::setTouchDeviceConfigs(SP<ITouch> dev) {
                 libinput_device_config_send_events_set_mode(LIBINPUTDEV, mode);
 
             if (libinput_device_config_calibration_has_matrix(LIBINPUTDEV)) {
-                Debug::log(LOG, "Setting calibration matrix for device {}", PTOUCHDEV->m_hlName);
+                Log::logger->log(Log::DEBUG, "Setting calibration matrix for device {}", PTOUCHDEV->m_hlName);
                 // default value of transform being -1 means it's unset.
                 const int ROTATION = std::clamp(g_pConfigManager->getDeviceInt(PTOUCHDEV->m_hlName, "transform", "input:touchdevice:transform"), -1, 7);
                 if (ROTATION > -1)
@@ -1767,10 +1795,10 @@ void CInputManager::setTouchDeviceConfigs(SP<ITouch> dev) {
             PTOUCHDEV->m_boundOutput = bound ? output : "";
             const auto PMONITOR      = bound ? g_pCompositor->getMonitorFromName(output) : nullptr;
             if (PMONITOR) {
-                Debug::log(LOG, "Binding touch device {} to output {}", PTOUCHDEV->m_hlName, PMONITOR->m_name);
+                Log::logger->log(Log::DEBUG, "Binding touch device {} to output {}", PTOUCHDEV->m_hlName, PMONITOR->m_name);
                 // wlr_cursor_map_input_to_output(g_pCompositor->m_sWLRCursor, &PTOUCHDEV->wlr()->base, PMONITOR->output);
             } else if (bound)
-                Debug::log(ERR, "Failed to bind touch device {} to output '{}': monitor not found", PTOUCHDEV->m_hlName, output);
+                Log::logger->log(Log::ERR, "Failed to bind touch device {} to output '{}': monitor not found", PTOUCHDEV->m_hlName, output);
         }
     };
 
@@ -1794,7 +1822,7 @@ void CInputManager::setTabletConfigs() {
             t->m_relativeInput  = RELINPUT;
 
             const int ROTATION = std::clamp(g_pConfigManager->getDeviceInt(NAME, "transform", "input:tablet:transform"), -1, 7);
-            Debug::log(LOG, "Setting calibration matrix for device {}", NAME);
+            Log::logger->log(Log::DEBUG, "Setting calibration matrix for device {}", NAME);
             if (ROTATION > -1)
                 libinput_device_config_calibration_set_matrix(LIBINPUTDEV, MATRICES[ROTATION]);
 
@@ -1805,7 +1833,7 @@ void CInputManager::setTabletConfigs() {
 
             const auto OUTPUT = g_pConfigManager->getDeviceString(NAME, "output", "input:tablet:output");
             if (OUTPUT != STRVAL_EMPTY) {
-                Debug::log(LOG, "Binding tablet {} to output {}", NAME, OUTPUT);
+                Log::logger->log(Log::DEBUG, "Binding tablet {} to output {}", NAME, OUTPUT);
                 t->m_boundOutput = OUTPUT;
             } else
                 t->m_boundOutput = "";
@@ -1836,22 +1864,22 @@ void CInputManager::newSwitch(SP<Aquamarine::ISwitch> pDevice) {
     const auto PNEWDEV = &m_switches.emplace_back();
     PNEWDEV->pDevice   = pDevice;
 
-    Debug::log(LOG, "New switch with name \"{}\" added", pDevice->getName());
+    Log::logger->log(Log::DEBUG, "New switch with name \"{}\" added", pDevice->getName());
 
     PNEWDEV->listeners.destroy = pDevice->events.destroy.listen([this, PNEWDEV] { destroySwitch(PNEWDEV); });
 
     PNEWDEV->listeners.fire = pDevice->events.fire.listen([PNEWDEV](const Aquamarine::ISwitch::SFireEvent& event) {
         const auto NAME = PNEWDEV->pDevice->getName();
 
-        Debug::log(LOG, "Switch {} fired, triggering binds.", NAME);
+        Log::logger->log(Log::DEBUG, "Switch {} fired, triggering binds.", NAME);
 
         g_pKeybindManager->onSwitchEvent(NAME);
 
         if (event.enable) {
-            Debug::log(LOG, "Switch {} turn on, triggering binds.", NAME);
+            Log::logger->log(Log::DEBUG, "Switch {} turn on, triggering binds.", NAME);
             g_pKeybindManager->onSwitchOnEvent(NAME);
         } else {
-            Debug::log(LOG, "Switch {} turn off, triggering binds.", NAME);
+            Log::logger->log(Log::DEBUG, "Switch {} turn off, triggering binds.", NAME);
             g_pKeybindManager->onSwitchOffEvent(NAME);
         }
     });

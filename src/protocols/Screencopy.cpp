@@ -27,7 +27,7 @@ CScreencopyFrame::CScreencopyFrame(SP<CZwlrScreencopyFrameV1> resource_, int32_t
     m_monitor       = CWLOutputResource::fromResource(output)->m_monitor;
 
     if (!m_monitor) {
-        LOGM(ERR, "Client requested sharing of a monitor that doesn't exist");
+        LOGM(Log::ERR, "Client requested sharing of a monitor that doesn't exist");
         m_resource->sendFailed();
         return;
     }
@@ -44,7 +44,7 @@ CScreencopyFrame::CScreencopyFrame(SP<CZwlrScreencopyFrameV1> resource_, int32_t
 
     m_shmFormat = g_pHyprOpenGL->getPreferredReadFormat(m_monitor.lock());
     if (m_shmFormat == DRM_FORMAT_INVALID) {
-        LOGM(ERR, "No format supported by renderer in capture output");
+        LOGM(Log::ERR, "No format supported by renderer in capture output");
         m_resource->sendFailed();
         return;
     }
@@ -55,7 +55,7 @@ CScreencopyFrame::CScreencopyFrame(SP<CZwlrScreencopyFrameV1> resource_, int32_t
 
     const auto PSHMINFO = NFormatUtils::getPixelFormatFromDRM(m_shmFormat);
     if (!PSHMINFO) {
-        LOGM(ERR, "No pixel format supported by renderer in capture output");
+        LOGM(Log::ERR, "No pixel format supported by renderer in capture output");
         m_resource->sendFailed();
         return;
     }
@@ -68,7 +68,7 @@ CScreencopyFrame::CScreencopyFrame(SP<CZwlrScreencopyFrameV1> resource_, int32_t
         m_box = box_;
 
     const auto POS = m_box.pos() * m_monitor->m_scale;
-    m_box.transform(wlTransformToHyprutils(m_monitor->m_transform), m_monitor->m_pixelSize.x, m_monitor->m_pixelSize.y).scale(m_monitor->m_scale).round();
+    m_box.transform(Math::wlTransformToHyprutils(m_monitor->m_transform), m_monitor->m_pixelSize.x, m_monitor->m_pixelSize.y).scale(m_monitor->m_scale).round();
     m_box.x = POS.x;
     m_box.y = POS.y;
 
@@ -86,33 +86,33 @@ CScreencopyFrame::CScreencopyFrame(SP<CZwlrScreencopyFrameV1> resource_, int32_t
 
 void CScreencopyFrame::copy(CZwlrScreencopyFrameV1* pFrame, wl_resource* buffer_) {
     if UNLIKELY (!good()) {
-        LOGM(ERR, "No frame in copyFrame??");
+        LOGM(Log::ERR, "No frame in copyFrame??");
         return;
     }
 
     if UNLIKELY (!g_pCompositor->monitorExists(m_monitor.lock())) {
-        LOGM(ERR, "Client requested sharing of a monitor that is gone");
+        LOGM(Log::ERR, "Client requested sharing of a monitor that is gone");
         m_resource->sendFailed();
         return;
     }
 
     const auto PBUFFER = CWLBufferResource::fromResource(buffer_);
     if UNLIKELY (!PBUFFER) {
-        LOGM(ERR, "Invalid buffer in {:x}", (uintptr_t)this);
+        LOGM(Log::ERR, "Invalid buffer in {:x}", (uintptr_t)this);
         m_resource->error(ZWLR_SCREENCOPY_FRAME_V1_ERROR_INVALID_BUFFER, "invalid buffer");
         PROTO::screencopy->destroyResource(this);
         return;
     }
 
     if UNLIKELY (PBUFFER->m_buffer->size != m_box.size()) {
-        LOGM(ERR, "Invalid dimensions in {:x}", (uintptr_t)this);
+        LOGM(Log::ERR, "Invalid dimensions in {:x}", (uintptr_t)this);
         m_resource->error(ZWLR_SCREENCOPY_FRAME_V1_ERROR_INVALID_BUFFER, "invalid buffer dimensions");
         PROTO::screencopy->destroyResource(this);
         return;
     }
 
     if UNLIKELY (m_buffer) {
-        LOGM(ERR, "Buffer used in {:x}", (uintptr_t)this);
+        LOGM(Log::ERR, "Buffer used in {:x}", (uintptr_t)this);
         m_resource->error(ZWLR_SCREENCOPY_FRAME_V1_ERROR_ALREADY_USED, "frame already used");
         PROTO::screencopy->destroyResource(this);
         return;
@@ -122,25 +122,25 @@ void CScreencopyFrame::copy(CZwlrScreencopyFrameV1* pFrame, wl_resource* buffer_
         m_bufferDMA = true;
 
         if (attrs.format != m_dmabufFormat) {
-            LOGM(ERR, "Invalid buffer dma format in {:x}", (uintptr_t)pFrame);
+            LOGM(Log::ERR, "Invalid buffer dma format in {:x}", (uintptr_t)pFrame);
             m_resource->error(ZWLR_SCREENCOPY_FRAME_V1_ERROR_INVALID_BUFFER, "invalid buffer format");
             PROTO::screencopy->destroyResource(this);
             return;
         }
     } else if (auto attrs = PBUFFER->m_buffer->shm(); attrs.success) {
         if (attrs.format != m_shmFormat) {
-            LOGM(ERR, "Invalid buffer shm format in {:x}", (uintptr_t)pFrame);
+            LOGM(Log::ERR, "Invalid buffer shm format in {:x}", (uintptr_t)pFrame);
             m_resource->error(ZWLR_SCREENCOPY_FRAME_V1_ERROR_INVALID_BUFFER, "invalid buffer format");
             PROTO::screencopy->destroyResource(this);
             return;
         } else if (attrs.stride != m_shmStride) {
-            LOGM(ERR, "Invalid buffer shm stride in {:x}", (uintptr_t)pFrame);
+            LOGM(Log::ERR, "Invalid buffer shm stride in {:x}", (uintptr_t)pFrame);
             m_resource->error(ZWLR_SCREENCOPY_FRAME_V1_ERROR_INVALID_BUFFER, "invalid buffer stride");
             PROTO::screencopy->destroyResource(this);
             return;
         }
     } else {
-        LOGM(ERR, "Invalid buffer type in {:x}", (uintptr_t)pFrame);
+        LOGM(Log::ERR, "Invalid buffer type in {:x}", (uintptr_t)pFrame);
         m_resource->error(ZWLR_SCREENCOPY_FRAME_V1_ERROR_INVALID_BUFFER, "invalid buffer type");
         PROTO::screencopy->destroyResource(this);
         return;
@@ -167,7 +167,7 @@ void CScreencopyFrame::share() {
             return;
 
         if (!success) {
-            LOGM(ERR, "{} copy failed in {:x}", m_bufferDMA ? "Dmabuf" : "Shm", (uintptr_t)this);
+            LOGM(Log::ERR, "{} copy failed in {:x}", m_bufferDMA ? "Dmabuf" : "Shm", (uintptr_t)this);
             m_resource->sendFailed();
             return;
         }
@@ -192,15 +192,14 @@ void CScreencopyFrame::share() {
 }
 
 void CScreencopyFrame::renderMon() {
-    auto       TEXTURE = makeShared<CTexture>(m_monitor->m_output->state->state().buffer);
-
+    auto       TEXTURE    = makeShared<CTexture>(m_monitor->m_output->state->state().buffer);
     CRegion    fakeDamage = {0, 0, INT16_MAX, INT16_MAX};
 
     const bool IS_CM_AWARE = PROTO::colorManagement && PROTO::colorManagement->isClientCMAware(m_client->client());
 
     CBox       monbox = CBox{0, 0, m_monitor->m_pixelSize.x, m_monitor->m_pixelSize.y}
                       .translate({-m_box.x, -m_box.y}) // vvvv kinda ass-backwards but that's how I designed the renderer... sigh.
-                      .transform(wlTransformToHyprutils(invertTransform(m_monitor->m_transform)), m_monitor->m_pixelSize.x, m_monitor->m_pixelSize.y);
+                      .transform(Math::wlTransformToHyprutils(Math::invertTransform(m_monitor->m_transform)), m_monitor->m_pixelSize.x, m_monitor->m_pixelSize.y);
     g_pHyprOpenGL->pushMonitorTransformEnabled(true);
     g_pHyprOpenGL->setRenderModifEnabled(false);
     g_pHyprOpenGL->renderTexture(TEXTURE, monbox,
@@ -300,7 +299,7 @@ void CScreencopyFrame::storeTempFB() {
     CRegion fakeDamage = {0, 0, INT16_MAX, INT16_MAX};
 
     if (!g_pHyprRenderer->beginRender(m_monitor.lock(), fakeDamage, RENDER_MODE_FULL_FAKE, nullptr, &m_tempFb, true)) {
-        LOGM(ERR, "Can't copy: failed to begin rendering to temp fb");
+        LOGM(Log::ERR, "Can't copy: failed to begin rendering to temp fb");
         return;
     }
 
@@ -315,7 +314,7 @@ void CScreencopyFrame::copyDmabuf(std::function<void(bool)> callback) {
     CRegion    fakeDamage = {0, 0, INT16_MAX, INT16_MAX};
 
     if (!g_pHyprRenderer->beginRender(m_monitor.lock(), fakeDamage, RENDER_MODE_TO_BUFFER, m_buffer.m_buffer, nullptr, true)) {
-        LOGM(ERR, "Can't copy: failed to begin rendering to dma frame");
+        LOGM(Log::ERR, "Can't copy: failed to begin rendering to dma frame");
         callback(false);
         return;
     }
@@ -338,7 +337,7 @@ void CScreencopyFrame::copyDmabuf(std::function<void(bool)> callback) {
     g_pHyprOpenGL->m_renderData.blockScreenShader = true;
 
     g_pHyprRenderer->endRender([callback]() {
-        LOGM(TRACE, "Copied frame via dma");
+        LOGM(Log::TRACE, "Copied frame via dma");
         callback(true);
     });
 }
@@ -357,7 +356,7 @@ bool CScreencopyFrame::copyShm() {
     fb.alloc(m_box.w, m_box.h, m_monitor->m_output->state->state().drmFormat);
 
     if (!g_pHyprRenderer->beginRender(m_monitor.lock(), fakeDamage, RENDER_MODE_FULL_FAKE, nullptr, &fb, true)) {
-        LOGM(ERR, "Can't copy: failed to begin rendering");
+        LOGM(Log::ERR, "Can't copy: failed to begin rendering");
         return false;
     }
 
@@ -380,12 +379,10 @@ bool CScreencopyFrame::copyShm() {
 
     const auto PFORMAT = NFormatUtils::getPixelFormatFromDRM(shm.format);
     if (!PFORMAT) {
-        LOGM(ERR, "Can't copy: failed to find a pixel format");
+        LOGM(Log::ERR, "Can't copy: failed to find a pixel format");
         g_pHyprRenderer->endRender();
         return false;
     }
-
-    auto glFormat = PFORMAT->flipRB ? GL_BGRA_EXT : GL_RGBA;
 
     g_pHyprOpenGL->m_renderData.blockScreenShader = true;
     g_pHyprRenderer->endRender();
@@ -396,8 +393,26 @@ bool CScreencopyFrame::copyShm() {
 
     glPixelStorei(GL_PACK_ALIGNMENT, 1);
 
-    const auto drmFmt     = NFormatUtils::getPixelFormatFromDRM(shm.format);
-    uint32_t   packStride = NFormatUtils::minStride(drmFmt, m_box.w);
+    uint32_t packStride = NFormatUtils::minStride(PFORMAT, m_box.w);
+    int      glFormat   = PFORMAT->glFormat;
+
+    if (glFormat == GL_RGBA)
+        glFormat = GL_BGRA_EXT;
+
+    if (glFormat != GL_BGRA_EXT && glFormat != GL_RGB) {
+        if (PFORMAT->swizzle.has_value()) {
+            std::array<GLint, 4> RGBA = SWIZZLE_RGBA;
+            std::array<GLint, 4> BGRA = SWIZZLE_BGRA;
+            if (PFORMAT->swizzle == RGBA)
+                glFormat = GL_RGBA;
+            else if (PFORMAT->swizzle == BGRA)
+                glFormat = GL_BGRA_EXT;
+            else {
+                LOGM(Log::ERR, "Copied frame via shm might be broken or color flipped");
+                glFormat = GL_RGBA;
+            }
+        }
+    }
 
     // This could be optimized by using a pixel buffer object to make this async,
     // but really clients should just use a dma buffer anyways.
@@ -410,11 +425,12 @@ bool CScreencopyFrame::copyShm() {
         }
     }
 
+    glPixelStorei(GL_PACK_ALIGNMENT, 4);
     g_pHyprOpenGL->m_renderData.pMonitor.reset();
 
     glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
 
-    LOGM(TRACE, "Copied frame via shm");
+    LOGM(Log::TRACE, "Copied frame via shm");
 
     return true;
 }
@@ -448,7 +464,7 @@ void CScreencopyClient::captureOutput(uint32_t frame, int32_t overlayCursor_, wl
         makeShared<CScreencopyFrame>(makeShared<CZwlrScreencopyFrameV1>(m_resource->client(), m_resource->version(), frame), overlayCursor_, output, box));
 
     if (!FRAME->good()) {
-        LOGM(ERR, "Couldn't alloc frame for sharing! (no memory)");
+        LOGM(Log::ERR, "Couldn't alloc frame for sharing! (no memory)");
         m_resource->noMemory();
         PROTO::screencopy->destroyResource(FRAME.get());
         return;
@@ -496,7 +512,7 @@ void CScreencopyProtocol::bindManager(wl_client* client, void* data, uint32_t ve
     const auto CLIENT = m_clients.emplace_back(makeShared<CScreencopyClient>(makeShared<CZwlrScreencopyManagerV1>(client, ver, id)));
 
     if (!CLIENT->good()) {
-        LOGM(LOG, "Failed to bind client! (out of memory)");
+        LOGM(Log::DEBUG, "Failed to bind client! (out of memory)");
         CLIENT->m_resource->noMemory();
         m_clients.pop_back();
         return;
@@ -504,7 +520,7 @@ void CScreencopyProtocol::bindManager(wl_client* client, void* data, uint32_t ve
 
     CLIENT->m_self = CLIENT;
 
-    LOGM(LOG, "Bound client successfully!");
+    LOGM(Log::DEBUG, "Bound client successfully!");
 }
 
 void CScreencopyProtocol::destroyResource(CScreencopyClient* client) {

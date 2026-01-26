@@ -36,7 +36,7 @@
 #include "pass/RectPassElement.hpp"
 #include "pass/RendererHintsPassElement.hpp"
 #include "pass/SurfacePassElement.hpp"
-#include "debug/Log.hpp"
+#include "debug/log/Logger.hpp"
 #include "../protocols/ColorManagement.hpp"
 #include "../protocols/types/ContentType.hpp"
 #include "../helpers/MiscFunctions.hpp"
@@ -76,14 +76,14 @@ CHyprRenderer::CHyprRenderer() {
             else if (name.contains("softpipe") || name.contains("Software Rasterizer") || name.contains("llvmpipe"))
                 m_software = true;
 
-            Debug::log(LOG, "DRM driver information: {} v{}.{}.{} from {} description {}", name, DRMV->version_major, DRMV->version_minor, DRMV->version_patchlevel,
-                       std::string{DRMV->date, DRMV->date_len}, std::string{DRMV->desc, DRMV->desc_len});
+            Log::logger->log(Log::DEBUG, "DRM driver information: {} v{}.{}.{} from {} description {}", name, DRMV->version_major, DRMV->version_minor, DRMV->version_patchlevel,
+                             std::string{DRMV->date, DRMV->date_len}, std::string{DRMV->desc, DRMV->desc_len});
 
             drmFreeVersion(DRMV);
         }
         m_mgpu = drmDevices > 1;
     } else {
-        Debug::log(LOG, "Aq backend has no session, omitting full DRM node checks");
+        Log::logger->log(Log::DEBUG, "Aq backend has no session, omitting full DRM node checks");
 
         const auto DRMV = drmGetVersion(g_pCompositor->m_drm.fd);
 
@@ -98,17 +98,17 @@ CHyprRenderer::CHyprRenderer() {
             else if (name.contains("softpipe") || name.contains("Software Rasterizer") || name.contains("llvmpipe"))
                 m_software = true;
 
-            Debug::log(LOG, "Primary DRM driver information: {} v{}.{}.{} from {} description {}", name, DRMV->version_major, DRMV->version_minor, DRMV->version_patchlevel,
-                       std::string{DRMV->date, DRMV->date_len}, std::string{DRMV->desc, DRMV->desc_len});
+            Log::logger->log(Log::DEBUG, "Primary DRM driver information: {} v{}.{}.{} from {} description {}", name, DRMV->version_major, DRMV->version_minor,
+                             DRMV->version_patchlevel, std::string{DRMV->date, DRMV->date_len}, std::string{DRMV->desc, DRMV->desc_len});
         } else {
-            Debug::log(LOG, "No primary DRM driver information found");
+            Log::logger->log(Log::DEBUG, "No primary DRM driver information found");
         }
 
         drmFreeVersion(DRMV);
     }
 
     if (m_nvidia)
-        Debug::log(WARN, "NVIDIA detected, please remember to follow nvidia instructions on the wiki");
+        Log::logger->log(Log::WARN, "NVIDIA detected, please remember to follow nvidia instructions on the wiki");
 
     // cursor hiding stuff
 
@@ -121,12 +121,14 @@ CHyprRenderer::CHyprRenderer() {
     });
 
     static auto P2 = g_pHookSystem->hookDynamic("mouseMove", [&](void* self, SCallbackInfo& info, std::any param) {
-        if (!m_cursorHiddenConditions.hiddenOnKeyboard && m_cursorHiddenConditions.hiddenOnTouch == g_pInputManager->m_lastInputTouch && !m_cursorHiddenConditions.hiddenOnTimeout)
+        if (!m_cursorHiddenConditions.hiddenOnKeyboard && m_cursorHiddenConditions.hiddenOnTouch == g_pInputManager->m_lastInputTouch &&
+            m_cursorHiddenConditions.hiddenOnTablet == g_pInputManager->m_lastInputTablet && !m_cursorHiddenConditions.hiddenOnTimeout)
             return;
 
         m_cursorHiddenConditions.hiddenOnKeyboard = false;
         m_cursorHiddenConditions.hiddenOnTimeout  = false;
         m_cursorHiddenConditions.hiddenOnTouch    = g_pInputManager->m_lastInputTouch;
+        m_cursorHiddenConditions.hiddenOnTablet   = g_pInputManager->m_lastInputTablet;
         ensureCursorRenderingMode();
     });
 
@@ -900,10 +902,10 @@ void CHyprRenderer::renderAllClientsForWorkspace(PHLMONITOR pMonitor, PHLWORKSPA
     static auto PXPMODE          = CConfigValue<Hyprlang::INT>("render:xp_mode");
     static auto PSESSIONLOCKXRAY = CConfigValue<Hyprlang::INT>("misc:session_lock_xray");
 
-    if (!pMonitor)
+    if UNLIKELY (!pMonitor)
         return;
 
-    if (g_pSessionLockManager->isSessionLocked() && !*PSESSIONLOCKXRAY) {
+    if UNLIKELY (g_pSessionLockManager->isSessionLocked() && !*PSESSIONLOCKXRAY) {
         // We stop to render workspaces as soon as the lockscreen was sent the "locked" or "finished" (aka denied) event.
         // In addition we make sure to stop rendering workspaces after misc:lockdead_screen_delay has passed.
         if (g_pSessionLockManager->shallConsiderLockMissing() || g_pSessionLockManager->clientLocked() || g_pSessionLockManager->clientDenied())
@@ -917,10 +919,10 @@ void CHyprRenderer::renderAllClientsForWorkspace(PHLMONITOR pMonitor, PHLWORKSPA
     SRenderModifData RENDERMODIFDATA;
     if (translate != Vector2D{0, 0})
         RENDERMODIFDATA.modifs.emplace_back(std::make_pair<>(SRenderModifData::eRenderModifType::RMOD_TYPE_TRANSLATE, translate));
-    if (scale != 1.f)
+    if UNLIKELY (scale != 1.f)
         RENDERMODIFDATA.modifs.emplace_back(std::make_pair<>(SRenderModifData::eRenderModifType::RMOD_TYPE_SCALE, scale));
 
-    if (!RENDERMODIFDATA.modifs.empty())
+    if UNLIKELY (!RENDERMODIFDATA.modifs.empty())
         g_pHyprRenderer->m_renderPass.add(makeUnique<CRendererHintsPassElement>(CRendererHintsPassElement::SData{RENDERMODIFDATA}));
 
     CScopeGuard x([&RENDERMODIFDATA] {
@@ -929,7 +931,7 @@ void CHyprRenderer::renderAllClientsForWorkspace(PHLMONITOR pMonitor, PHLWORKSPA
         }
     });
 
-    if (!pWorkspace) {
+    if UNLIKELY (!pWorkspace) {
         // allow rendering without a workspace. In this case, just render layers.
 
         renderBackground(pMonitor);
@@ -955,7 +957,7 @@ void CHyprRenderer::renderAllClientsForWorkspace(PHLMONITOR pMonitor, PHLWORKSPA
         return;
     }
 
-    if (!*PXPMODE) {
+    if LIKELY (!*PXPMODE) {
         renderBackground(pMonitor);
 
         for (auto const& ls : pMonitor->m_layerSurfaceLayers[ZWLR_LAYER_SHELL_V1_LAYER_BACKGROUND]) {
@@ -972,13 +974,13 @@ void CHyprRenderer::renderAllClientsForWorkspace(PHLMONITOR pMonitor, PHLWORKSPA
     // pre window pass
     g_pHyprOpenGL->preWindowPass();
 
-    if (pWorkspace->m_hasFullscreenWindow)
+    if UNLIKELY /* subjective? */ (pWorkspace->m_hasFullscreenWindow)
         renderWorkspaceWindowsFullscreen(pMonitor, pWorkspace, time);
     else
         renderWorkspaceWindows(pMonitor, pWorkspace, time);
 
     // and then special
-    if (pMonitor->m_specialFade->value() != 0.F) {
+    if UNLIKELY (pMonitor->m_specialFade->value() != 0.F) {
         const auto SPECIALANIMPROGRS = pMonitor->m_specialFade->getCurveValue();
         const bool ANIMOUT           = !pMonitor->m_activeSpecialWorkspace;
 
@@ -1266,6 +1268,7 @@ void CHyprRenderer::renderMonitor(PHLMONITOR pMonitor, bool commit) {
     static auto                                           PDEBUGOVERLAY       = CConfigValue<Hyprlang::INT>("debug:overlay");
     static auto                                           PDAMAGETRACKINGMODE = CConfigValue<Hyprlang::INT>("debug:damage_tracking");
     static auto                                           PDAMAGEBLINK        = CConfigValue<Hyprlang::INT>("debug:damage_blink");
+    static auto                                           PSOLDAMAGE          = CConfigValue<Hyprlang::INT>("debug:render_solitary_wo_damage");
     static auto                                           PVFR                = CConfigValue<Hyprlang::INT>("misc:vfr");
 
     static int                                            damageBlinkCleanup = 0; // because double-buffered
@@ -1273,7 +1276,7 @@ void CHyprRenderer::renderMonitor(PHLMONITOR pMonitor, bool commit) {
     const float                                           ZOOMFACTOR = pMonitor->m_cursorZoom->value();
 
     if (pMonitor->m_pixelSize.x < 1 || pMonitor->m_pixelSize.y < 1) {
-        Debug::log(ERR, "Refusing to render a monitor because of an invalid pixel size: {}", pMonitor->m_pixelSize);
+        Log::logger->log(Log::ERR, "Refusing to render a monitor because of an invalid pixel size: {}", pMonitor->m_pixelSize);
         return;
     }
 
@@ -1320,7 +1323,7 @@ void CHyprRenderer::renderMonitor(PHLMONITOR pMonitor, bool commit) {
     if (pMonitor->attemptDirectScanout()) {
         return;
     } else if (!pMonitor->m_lastScanout.expired()) {
-        Debug::log(LOG, "Left a direct scanout.");
+        Log::logger->log(Log::DEBUG, "Left a direct scanout.");
         pMonitor->m_lastScanout.reset();
 
         // reset DRM format, but only if needed since it might modeset
@@ -1341,7 +1344,7 @@ void CHyprRenderer::renderMonitor(PHLMONITOR pMonitor, bool commit) {
         return;
 
     if (*PDAMAGETRACKINGMODE == -1) {
-        Debug::log(CRIT, "Damage tracking mode -1 ????");
+        Log::logger->log(Log::CRIT, "Damage tracking mode -1 ????");
         return;
     }
 
@@ -1379,7 +1382,7 @@ void CHyprRenderer::renderMonitor(PHLMONITOR pMonitor, bool commit) {
 
     CRegion damage, finalDamage;
     if (!beginRender(pMonitor, damage, RENDER_MODE_NORMAL)) {
-        Debug::log(ERR, "renderer: couldn't beginRender()!");
+        Log::logger->log(Log::ERR, "renderer: couldn't beginRender()!");
         return;
     }
 
@@ -1402,46 +1405,45 @@ void CHyprRenderer::renderMonitor(PHLMONITOR pMonitor, bool commit) {
 
     bool renderCursor = true;
 
-    if (!finalDamage.empty()) {
-        if (pMonitor->m_solitaryClient.expired()) {
-            if (pMonitor->isMirror()) {
-                g_pHyprOpenGL->blend(false);
-                g_pHyprOpenGL->renderMirrored();
-                g_pHyprOpenGL->blend(true);
-                EMIT_HOOK_EVENT("render", RENDER_POST_MIRROR);
-                renderCursor = false;
-            } else {
-                CBox renderBox = {0, 0, sc<int>(pMonitor->m_pixelSize.x), sc<int>(pMonitor->m_pixelSize.y)};
-                renderWorkspace(pMonitor, pMonitor->m_activeWorkspace, NOW, renderBox);
+    if (pMonitor->m_solitaryClient && (!finalDamage.empty() || *PSOLDAMAGE))
+        renderWindow(pMonitor->m_solitaryClient.lock(), pMonitor, NOW, false, RENDER_PASS_MAIN /* solitary = no popups */);
+    else if (!finalDamage.empty()) {
+        if (pMonitor->isMirror()) {
+            g_pHyprOpenGL->blend(false);
+            g_pHyprOpenGL->renderMirrored();
+            g_pHyprOpenGL->blend(true);
+            EMIT_HOOK_EVENT("render", RENDER_POST_MIRROR);
+            renderCursor = false;
+        } else {
+            CBox renderBox = {0, 0, sc<int>(pMonitor->m_pixelSize.x), sc<int>(pMonitor->m_pixelSize.y)};
+            renderWorkspace(pMonitor, pMonitor->m_activeWorkspace, NOW, renderBox);
 
-                renderLockscreen(pMonitor, NOW, renderBox);
+            renderLockscreen(pMonitor, NOW, renderBox);
 
-                if (pMonitor == Desktop::focusState()->monitor()) {
-                    g_pHyprNotificationOverlay->draw(pMonitor);
-                    g_pHyprError->draw();
-                }
-
-                // for drawing the debug overlay
-                if (pMonitor == g_pCompositor->m_monitors.front() && *PDEBUGOVERLAY == 1) {
-                    renderStartOverlay = std::chrono::high_resolution_clock::now();
-                    g_pDebugOverlay->draw();
-                    endRenderOverlay = std::chrono::high_resolution_clock::now();
-                }
-
-                if (*PDAMAGEBLINK && damageBlinkCleanup == 0) {
-                    CRectPassElement::SRectData data;
-                    data.box   = {0, 0, pMonitor->m_transformedSize.x, pMonitor->m_transformedSize.y};
-                    data.color = CHyprColor(1.0, 0.0, 1.0, 100.0 / 255.0);
-                    m_renderPass.add(makeUnique<CRectPassElement>(data));
-                    damageBlinkCleanup = 1;
-                } else if (*PDAMAGEBLINK) {
-                    damageBlinkCleanup++;
-                    if (damageBlinkCleanup > 3)
-                        damageBlinkCleanup = 0;
-                }
+            if (pMonitor == Desktop::focusState()->monitor()) {
+                g_pHyprNotificationOverlay->draw(pMonitor);
+                g_pHyprError->draw();
             }
-        } else
-            renderWindow(pMonitor->m_solitaryClient.lock(), pMonitor, NOW, false, RENDER_PASS_MAIN /* solitary = no popups */);
+
+            // for drawing the debug overlay
+            if (pMonitor == g_pCompositor->m_monitors.front() && *PDEBUGOVERLAY == 1) {
+                renderStartOverlay = std::chrono::high_resolution_clock::now();
+                g_pDebugOverlay->draw();
+                endRenderOverlay = std::chrono::high_resolution_clock::now();
+            }
+
+            if (*PDAMAGEBLINK && damageBlinkCleanup == 0) {
+                CRectPassElement::SRectData data;
+                data.box   = {0, 0, pMonitor->m_transformedSize.x, pMonitor->m_transformedSize.y};
+                data.color = CHyprColor(1.0, 0.0, 1.0, 100.0 / 255.0);
+                m_renderPass.add(makeUnique<CRectPassElement>(data));
+                damageBlinkCleanup = 1;
+            } else if (*PDAMAGEBLINK) {
+                damageBlinkCleanup++;
+                if (damageBlinkCleanup > 3)
+                    damageBlinkCleanup = 0;
+            }
+        }
     } else if (!pMonitor->isMirror()) {
         sendFrameEventsToWorkspace(pMonitor, pMonitor->m_activeWorkspace, NOW);
         if (pMonitor->m_activeSpecialWorkspace)
@@ -1471,8 +1473,8 @@ void CHyprRenderer::renderMonitor(PHLMONITOR pMonitor, bool commit) {
 
     CRegion    frameDamage{g_pHyprOpenGL->m_renderData.damage};
 
-    const auto TRANSFORM = invertTransform(pMonitor->m_transform);
-    frameDamage.transform(wlTransformToHyprutils(TRANSFORM), pMonitor->m_transformedSize.x, pMonitor->m_transformedSize.y);
+    const auto TRANSFORM = Math::invertTransform(pMonitor->m_transform);
+    frameDamage.transform(Math::wlTransformToHyprutils(TRANSFORM), pMonitor->m_transformedSize.x, pMonitor->m_transformedSize.y);
 
     if (*PDAMAGETRACKINGMODE == DAMAGE_TRACKING_NONE || *PDAMAGETRACKINGMODE == DAMAGE_TRACKING_MONITOR)
         frameDamage.add(0, 0, sc<int>(pMonitor->m_transformedSize.x), sc<int>(pMonitor->m_transformedSize.y));
@@ -1519,6 +1521,7 @@ static const hdr_output_metadata NO_HDR_METADATA = {.hdmi_metadata_type1 = hdr_m
 static hdr_output_metadata       createHDRMetadata(SImageDescription settings, SP<CMonitor> monitor) {
     uint8_t eotf = 0;
     switch (settings.transferFunction) {
+        case CM_TRANSFER_FUNCTION_GAMMA22:
         case CM_TRANSFER_FUNCTION_SRGB: eotf = 0; break; // used to send primaries and luminances to AQ. ignored for now
         case CM_TRANSFER_FUNCTION_ST2084_PQ: eotf = 2; break;
         case CM_TRANSFER_FUNCTION_EXT_LINEAR:
@@ -1531,13 +1534,15 @@ static hdr_output_metadata       createHDRMetadata(SImageDescription settings, S
     const auto toNits  = [](uint32_t value) { return sc<uint16_t>(std::round(value)); };
     const auto to16Bit = [](float value) { return sc<uint16_t>(std::round(value * 50000)); };
 
-    auto       colorimetry = settings.primariesNameSet || settings.primaries == SPCPRimaries{} ? getPrimaries(settings.primariesNamed) : settings.primaries;
+    auto       colorimetry = settings.getPrimaries();
     auto       luminances  = settings.masteringLuminances.max > 0 ? settings.masteringLuminances :
-                                                                          SImageDescription::SPCMasteringLuminances{.min = monitor->minLuminance(), .max = monitor->maxLuminance(10000)};
+                                                                          (settings.luminances != SImageDescription::SPCLuminances{} ?
+                                                                               SImageDescription::SPCMasteringLuminances{.min = settings.luminances.min, .max = settings.luminances.max} :
+                                                                               SImageDescription::SPCMasteringLuminances{.min = monitor->minLuminance(), .max = monitor->maxLuminance(10000)});
 
-    Debug::log(TRACE, "ColorManagement primaries {},{} {},{} {},{} {},{}", colorimetry.red.x, colorimetry.red.y, colorimetry.green.x, colorimetry.green.y, colorimetry.blue.x,
-                     colorimetry.blue.y, colorimetry.white.x, colorimetry.white.y);
-    Debug::log(TRACE, "ColorManagement min {}, max {}, cll {}, fall {}", luminances.min, luminances.max, settings.maxCLL, settings.maxFALL);
+    Log::logger->log(Log::TRACE, "ColorManagement primaries {},{} {},{} {},{} {},{}", colorimetry.red.x, colorimetry.red.y, colorimetry.green.x, colorimetry.green.y,
+                           colorimetry.blue.x, colorimetry.blue.y, colorimetry.white.x, colorimetry.white.y);
+    Log::logger->log(Log::TRACE, "ColorManagement min {}, max {}, cll {}, fall {}", luminances.min, luminances.max, settings.maxCLL, settings.maxFALL);
     return hdr_output_metadata{
               .metadata_type = 0,
               .hdmi_metadata_type1 =
@@ -1553,8 +1558,8 @@ static hdr_output_metadata       createHDRMetadata(SImageDescription settings, S
                       .white_point                     = {.x = to16Bit(colorimetry.white.x), .y = to16Bit(colorimetry.white.y)},
                       .max_display_mastering_luminance = toNits(luminances.max),
                       .min_display_mastering_luminance = toNits(luminances.min * 10000),
-                      .max_cll                         = toNits(settings.maxCLL),
-                      .max_fall                        = toNits(settings.maxFALL),
+                      .max_cll                         = toNits(settings.maxCLL > 0 ? settings.maxCLL : monitor->maxCLL()),
+                      .max_fall                        = toNits(settings.maxFALL > 0 ? settings.maxFALL : monitor->maxFALL()),
             },
     };
 }
@@ -1568,7 +1573,7 @@ bool CHyprRenderer::commitPendingAndDoExplicitSync(PHLMONITOR pMonitor) {
     const bool  configuredHDR = (pMonitor->m_cmType == NCMType::CM_HDR_EDID || pMonitor->m_cmType == NCMType::CM_HDR);
     bool        wantHDR       = configuredHDR;
 
-    const auto  FS_WINDOW = pMonitor->inFullscreenMode() ? pMonitor->m_activeWorkspace->getFullscreenWindow() : nullptr;
+    const auto  FS_WINDOW = pMonitor->getFullscreenWindow();
 
     if (pMonitor->supportsHDR()) {
         // HDR metadata determined by
@@ -1595,11 +1600,11 @@ bool CHyprRenderer::commitPendingAndDoExplicitSync(PHLMONITOR pMonitor) {
                     // passthrough
                     bool needsHdrMetadataUpdate = SURF->m_colorManagement->needsHdrMetadataUpdate() || pMonitor->m_previousFSWindow != FS_WINDOW || pMonitor->m_needsHDRupdate;
                     if (SURF->m_colorManagement->needsHdrMetadataUpdate()) {
-                        Debug::log(INFO, "[CM] Recreating HDR metadata for surface");
+                        Log::logger->log(Log::INFO, "[CM] Recreating HDR metadata for surface");
                         SURF->m_colorManagement->setHDRMetadata(createHDRMetadata(SURF->m_colorManagement->imageDescription(), pMonitor));
                     }
                     if (needsHdrMetadataUpdate) {
-                        Debug::log(INFO, "[CM] Updating HDR metadata from surface");
+                        Log::logger->log(Log::INFO, "[CM] Updating HDR metadata from surface");
                         pMonitor->m_output->state->setHDRMetadata(SURF->m_colorManagement->hdrMetadata());
                     }
                     hdrIsHandled               = true;
@@ -1616,12 +1621,12 @@ bool CHyprRenderer::commitPendingAndDoExplicitSync(PHLMONITOR pMonitor) {
                     // FIXME ok for now, will need some other logic if monitor image description can be modified some other way
                     const auto targetCM      = wantHDR ? (*PAUTOHDR == 2 ? NCMType::CM_HDR_EDID : NCMType::CM_HDR) : pMonitor->m_cmType;
                     const auto targetSDREOTF = pMonitor->m_sdrEotf;
-                    Debug::log(INFO, "[CM] Auto HDR: changing monitor cm to {}", sc<uint8_t>(targetCM));
+                    Log::logger->log(Log::INFO, "[CM] Auto HDR: changing monitor cm to {}", sc<uint8_t>(targetCM));
                     pMonitor->applyCMType(targetCM, targetSDREOTF);
                     pMonitor->m_previousFSWindow.reset(); // trigger CTM update
                 }
-                Debug::log(INFO, wantHDR ? "[CM] Updating HDR metadata from monitor" : "[CM] Restoring SDR mode");
-                pMonitor->m_output->state->setHDRMetadata(wantHDR ? createHDRMetadata(pMonitor->m_imageDescription, pMonitor) : NO_HDR_METADATA);
+                Log::logger->log(Log::INFO, wantHDR ? "[CM] Updating HDR metadata from monitor" : "[CM] Restoring SDR mode");
+                pMonitor->m_output->state->setHDRMetadata(wantHDR ? createHDRMetadata(pMonitor->m_imageDescription->value(), pMonitor) : NO_HDR_METADATA);
             }
             pMonitor->m_needsHDRupdate = true;
         }
@@ -1629,12 +1634,12 @@ bool CHyprRenderer::commitPendingAndDoExplicitSync(PHLMONITOR pMonitor) {
 
     const bool needsWCG = pMonitor->wantsWideColor();
     if (pMonitor->m_output->state->state().wideColorGamut != needsWCG) {
-        Debug::log(TRACE, "Setting wide color gamut {}", needsWCG ? "on" : "off");
+        Log::logger->log(Log::TRACE, "Setting wide color gamut {}", needsWCG ? "on" : "off");
         pMonitor->m_output->state->setWideColorGamut(needsWCG);
 
         // FIXME do not trust enabled10bit, auto switch to 10bit and back if needed
         if (needsWCG && !pMonitor->m_enabled10bit) {
-            Debug::log(WARN, "Wide color gamut is enabled but the display is not in 10bit mode");
+            Log::logger->log(Log::WARN, "Wide color gamut is enabled but the display is not in 10bit mode");
             static bool shown = false;
             if (!shown) {
                 g_pHyprNotificationOverlay->addNotification(I18n::i18nEngine()->localize(I18n::TXT_KEY_NOTIF_WIDE_COLOR_NOT_10B, {{"name", pMonitor->m_name}}), CHyprColor{}, 15000,
@@ -1647,21 +1652,22 @@ bool CHyprRenderer::commitPendingAndDoExplicitSync(PHLMONITOR pMonitor) {
     if (*PCT)
         pMonitor->m_output->state->setContentType(NContentType::toDRM(FS_WINDOW ? FS_WINDOW->getContentType() : CONTENT_TYPE_NONE));
 
-    if (FS_WINDOW != pMonitor->m_previousFSWindow) {
+    if (FS_WINDOW != pMonitor->m_previousFSWindow || (!FS_WINDOW && pMonitor->m_noShaderCTM)) {
         if (*PNONSHADER == CM_NS_IGNORE || !FS_WINDOW || !pMonitor->needsCM() || !pMonitor->canNoShaderCM() ||
             (*PNONSHADER == CM_NS_ONDEMAND && pMonitor->m_lastScanout.expired() && *PPASS != 1)) {
             if (pMonitor->m_noShaderCTM) {
-                Debug::log(INFO, "[CM] No fullscreen CTM, restoring previous one");
+                Log::logger->log(Log::INFO, "[CM] No fullscreen CTM, restoring previous one");
                 pMonitor->m_noShaderCTM = false;
                 pMonitor->m_ctmUpdated  = true;
             }
         } else {
             const auto FS_DESC = pMonitor->getFSImageDescription();
             if (FS_DESC.has_value()) {
-                Debug::log(INFO, "[CM] Updating fullscreen CTM");
-                pMonitor->m_noShaderCTM        = true;
-                const auto                 mat = FS_DESC->getPrimaries().convertMatrix(pMonitor->m_imageDescription.getPrimaries()).mat();
-                const std::array<float, 9> CTM = {
+                Log::logger->log(Log::INFO, "[CM] Updating fullscreen CTM");
+                pMonitor->m_noShaderCTM               = true;
+                auto                       conversion = FS_DESC.value()->getPrimaries()->convertMatrix(pMonitor->m_imageDescription->getPrimaries());
+                const auto                 mat        = conversion.mat();
+                const std::array<float, 9> CTM        = {
                     mat[0][0], mat[0][1], mat[0][2], //
                     mat[1][0], mat[1][1], mat[1][2], //
                     mat[2][0], mat[2][1], mat[2][2], //
@@ -1681,13 +1687,13 @@ bool CHyprRenderer::commitPendingAndDoExplicitSync(PHLMONITOR pMonitor) {
     bool ok = pMonitor->m_state.commit();
     if (!ok) {
         if (pMonitor->m_inFence.isValid()) {
-            Debug::log(TRACE, "Monitor state commit failed, retrying without a fence");
+            Log::logger->log(Log::TRACE, "Monitor state commit failed, retrying without a fence");
             pMonitor->m_output->state->resetExplicitFences();
             ok = pMonitor->m_state.commit();
         }
 
         if (!ok) {
-            Debug::log(TRACE, "Monitor state commit failed");
+            Log::logger->log(Log::TRACE, "Monitor state commit failed");
             // rollback the buffer to avoid writing to the front buffer that is being
             // displayed
             pMonitor->m_output->swapchain->rollback();
@@ -1705,7 +1711,7 @@ void CHyprRenderer::renderWorkspace(PHLMONITOR pMonitor, PHLWORKSPACE pWorkspace
     TRACY_GPU_ZONE("RenderWorkspace");
 
     if (!DELTALESSTHAN(sc<double>(geometry.width) / sc<double>(geometry.height), pMonitor->m_pixelSize.x / pMonitor->m_pixelSize.y, 0.01)) {
-        Debug::log(ERR, "Ignoring geometry in renderWorkspace: aspect ratio mismatch");
+        Log::logger->log(Log::ERR, "Ignoring geometry in renderWorkspace: aspect ratio mismatch");
         scale     = 1.f;
         translate = Vector2D{};
     }
@@ -1858,7 +1864,7 @@ void CHyprRenderer::arrangeLayerArray(PHLMONITOR pMonitor, const std::vector<PHL
             box.y -= PSTATE->margin.bottom;
 
         if (box.width <= 0 || box.height <= 0) {
-            Debug::log(ERR, "LayerSurface {:x} has a negative/zero w/h???", rc<uintptr_t>(ls.get()));
+            Log::logger->log(Log::ERR, "LayerSurface {:x} has a negative/zero w/h???", rc<uintptr_t>(ls.get()));
             continue;
         }
 
@@ -1917,7 +1923,7 @@ void CHyprRenderer::damageSurface(SP<CWLSurfaceResource> pSurface, double x, dou
     const auto WLSURF    = Desktop::View::CWLSurface::fromResource(pSurface);
     CRegion    damageBox = WLSURF ? WLSURF->computeDamage() : CRegion{};
     if (!WLSURF) {
-        Debug::log(ERR, "BUG THIS: No CWLSurface for surface in damageSurface!!!");
+        Log::logger->log(Log::ERR, "BUG THIS: No CWLSurface for surface in damageSurface!!!");
         return;
     }
 
@@ -1947,8 +1953,8 @@ void CHyprRenderer::damageSurface(SP<CWLSurfaceResource> pSurface, double x, dou
     static auto PLOGDAMAGE = CConfigValue<Hyprlang::INT>("debug:log_damage");
 
     if (*PLOGDAMAGE)
-        Debug::log(LOG, "Damage: Surface (extents): xy: {}, {} wh: {}, {}", damageBox.pixman()->extents.x1, damageBox.pixman()->extents.y1,
-                   damageBox.pixman()->extents.x2 - damageBox.pixman()->extents.x1, damageBox.pixman()->extents.y2 - damageBox.pixman()->extents.y1);
+        Log::logger->log(Log::DEBUG, "Damage: Surface (extents): xy: {}, {} wh: {}, {}", damageBox.pixman()->extents.x1, damageBox.pixman()->extents.y1,
+                         damageBox.pixman()->extents.x2 - damageBox.pixman()->extents.x1, damageBox.pixman()->extents.y2 - damageBox.pixman()->extents.y1);
 }
 
 void CHyprRenderer::damageWindow(PHLWINDOW pWindow, bool forceFull) {
@@ -1975,7 +1981,7 @@ void CHyprRenderer::damageWindow(PHLWINDOW pWindow, bool forceFull) {
     static auto PLOGDAMAGE = CConfigValue<Hyprlang::INT>("debug:log_damage");
 
     if (*PLOGDAMAGE)
-        Debug::log(LOG, "Damage: Window ({}): xy: {}, {} wh: {}, {}", pWindow->m_title, windowBox.x, windowBox.y, windowBox.width, windowBox.height);
+        Log::logger->log(Log::DEBUG, "Damage: Window ({}): xy: {}, {} wh: {}, {}", pWindow->m_title, windowBox.x, windowBox.y, windowBox.width, windowBox.height);
 }
 
 void CHyprRenderer::damageMonitor(PHLMONITOR pMonitor) {
@@ -1988,7 +1994,7 @@ void CHyprRenderer::damageMonitor(PHLMONITOR pMonitor) {
     static auto PLOGDAMAGE = CConfigValue<Hyprlang::INT>("debug:log_damage");
 
     if (*PLOGDAMAGE)
-        Debug::log(LOG, "Damage: Monitor {}", pMonitor->m_name);
+        Log::logger->log(Log::DEBUG, "Damage: Monitor {}", pMonitor->m_name);
 }
 
 void CHyprRenderer::damageBox(const CBox& box, bool skipFrameSchedule) {
@@ -2008,7 +2014,7 @@ void CHyprRenderer::damageBox(const CBox& box, bool skipFrameSchedule) {
     static auto PLOGDAMAGE = CConfigValue<Hyprlang::INT>("debug:log_damage");
 
     if (*PLOGDAMAGE)
-        Debug::log(LOG, "Damage: Box: xy: {}, {} wh: {}, {}", box.x, box.y, box.w, box.h);
+        Log::logger->log(Log::DEBUG, "Damage: Box: xy: {}, {} wh: {}, {}", box.x, box.y, box.w, box.h);
 }
 
 void CHyprRenderer::damageBox(const int& x, const int& y, const int& w, const int& h) {
@@ -2035,7 +2041,7 @@ void CHyprRenderer::damageMirrorsWith(PHLMONITOR pMonitor, const CRegion& pRegio
         monbox.y      = (monitor->m_transformedSize.y - monbox.h) / 2;
 
         transformed.scale(scale);
-        transformed.transform(wlTransformToHyprutils(pMonitor->m_transform), pMonitor->m_pixelSize.x * scale, pMonitor->m_pixelSize.y * scale);
+        transformed.transform(Math::wlTransformToHyprutils(pMonitor->m_transform), pMonitor->m_pixelSize.x * scale, pMonitor->m_pixelSize.y * scale);
         transformed.translate(Vector2D(monbox.x, monbox.y));
 
         mirror->addDamage(transformed);
@@ -2117,19 +2123,23 @@ void CHyprRenderer::ensureCursorRenderingMode() {
     static auto PINVISIBLE     = CConfigValue<Hyprlang::INT>("cursor:invisible");
     static auto PCURSORTIMEOUT = CConfigValue<Hyprlang::FLOAT>("cursor:inactive_timeout");
     static auto PHIDEONTOUCH   = CConfigValue<Hyprlang::INT>("cursor:hide_on_touch");
+    static auto PHIDEONTABLET  = CConfigValue<Hyprlang::INT>("cursor:hide_on_tablet");
     static auto PHIDEONKEY     = CConfigValue<Hyprlang::INT>("cursor:hide_on_key_press");
 
     if (*PCURSORTIMEOUT <= 0)
         m_cursorHiddenConditions.hiddenOnTimeout = false;
     if (*PHIDEONTOUCH == 0)
         m_cursorHiddenConditions.hiddenOnTouch = false;
+    if (*PHIDEONTABLET == 0)
+        m_cursorHiddenConditions.hiddenOnTablet = false;
     if (*PHIDEONKEY == 0)
         m_cursorHiddenConditions.hiddenOnKeyboard = false;
 
     if (*PCURSORTIMEOUT > 0)
         m_cursorHiddenConditions.hiddenOnTimeout = *PCURSORTIMEOUT < g_pInputManager->m_lastCursorMovement.getSeconds();
 
-    m_cursorHiddenByCondition = m_cursorHiddenConditions.hiddenOnTimeout || m_cursorHiddenConditions.hiddenOnTouch || m_cursorHiddenConditions.hiddenOnKeyboard;
+    m_cursorHiddenByCondition =
+        m_cursorHiddenConditions.hiddenOnTimeout || m_cursorHiddenConditions.hiddenOnTouch || m_cursorHiddenConditions.hiddenOnTablet || m_cursorHiddenConditions.hiddenOnKeyboard;
 
     const bool HIDE = m_cursorHiddenByCondition || (*PINVISIBLE != 0);
 
@@ -2137,7 +2147,7 @@ void CHyprRenderer::ensureCursorRenderingMode() {
         return;
 
     if (HIDE) {
-        Debug::log(LOG, "Hiding the cursor (hl-mandated)");
+        Log::logger->log(Log::DEBUG, "Hiding the cursor (hl-mandated)");
 
         for (auto const& m : g_pCompositor->m_monitors) {
             if (!g_pPointerManager->softwareLockedFor(m))
@@ -2149,7 +2159,7 @@ void CHyprRenderer::ensureCursorRenderingMode() {
         setCursorHidden(true);
 
     } else {
-        Debug::log(LOG, "Showing the cursor (hl-mandated)");
+        Log::logger->log(Log::DEBUG, "Showing the cursor (hl-mandated)");
 
         for (auto const& m : g_pCompositor->m_monitors) {
             if (!g_pPointerManager->softwareLockedFor(m))
@@ -2290,7 +2300,7 @@ bool CHyprRenderer::beginRender(PHLMONITOR pMonitor, CRegion& damage, eRenderMod
     if (!buffer) {
         m_currentBuffer = pMonitor->m_output->swapchain->next(&bufferAge);
         if (!m_currentBuffer) {
-            Debug::log(ERR, "Failed to acquire swapchain buffer for {}", pMonitor->m_name);
+            Log::logger->log(Log::ERR, "Failed to acquire swapchain buffer for {}", pMonitor->m_name);
             return false;
         }
     } else
@@ -2299,12 +2309,12 @@ bool CHyprRenderer::beginRender(PHLMONITOR pMonitor, CRegion& damage, eRenderMod
     try {
         m_currentRenderbuffer = getOrCreateRenderbuffer(m_currentBuffer, pMonitor->m_output->state->state().drmFormat);
     } catch (std::exception& e) {
-        Debug::log(ERR, "getOrCreateRenderbuffer failed for {}", pMonitor->m_name);
+        Log::logger->log(Log::ERR, "getOrCreateRenderbuffer failed for {}", pMonitor->m_name);
         return false;
     }
 
     if (!m_currentRenderbuffer) {
-        Debug::log(ERR, "failed to start a render pass for output {}, no RBO could be obtained", pMonitor->m_name);
+        Log::logger->log(Log::ERR, "failed to start a render pass for output {}, no RBO could be obtained", pMonitor->m_name);
         return false;
     }
 
@@ -2350,7 +2360,7 @@ void CHyprRenderer::endRender(const std::function<void()>& renderingDoneCallback
         PMONITOR->m_output->state->setBuffer(m_currentBuffer);
 
     if (!g_pHyprOpenGL->explicitSyncSupported()) {
-        Debug::log(TRACE, "renderer: Explicit sync unsupported, falling back to implicit in endRender");
+        Log::logger->log(Log::TRACE, "renderer: Explicit sync unsupported, falling back to implicit in endRender");
 
         // nvidia doesn't have implicit sync, so we have to explicitly wait here, llvmpipe and other software renderer seems to bug out aswell.
         if ((isNvidia() && *PNVIDIAANTIFLICKER) || isSoftware())
@@ -2366,7 +2376,7 @@ void CHyprRenderer::endRender(const std::function<void()>& renderingDoneCallback
     }
 
     UP<CEGLSync> eglSync = CEGLSync::create();
-    if (eglSync && eglSync->isValid()) {
+    if LIKELY (eglSync && eglSync->isValid()) {
         for (auto const& buf : m_usedAsyncBuffers) {
             for (const auto& releaser : buf->m_syncReleasers) {
                 releaser->addSyncFileFd(eglSync->fd());
@@ -2389,7 +2399,7 @@ void CHyprRenderer::endRender(const std::function<void()>& renderingDoneCallback
             PMONITOR->m_output->state->setExplicitInFence(PMONITOR->m_inFence.get());
         }
     } else {
-        Debug::log(ERR, "renderer: Explicit sync failed, releasing resources");
+        Log::logger->log(Log::ERR, "renderer: Explicit sync failed, releasing resources");
 
         m_usedAsyncBuffers.clear(); // release all buffer refs and hope implicit sync works
         if (renderingDoneCallback)
@@ -2443,7 +2453,7 @@ void CHyprRenderer::makeSnapshot(PHLWINDOW pWindow) {
     if (!shouldRenderWindow(pWindow))
         return; // ignore, window is not being rendered
 
-    Debug::log(LOG, "renderer: making a snapshot of {:x}", rc<uintptr_t>(pWindow.get()));
+    Log::logger->log(Log::DEBUG, "renderer: making a snapshot of {:x}", rc<uintptr_t>(pWindow.get()));
 
     // we need to "damage" the entire monitor
     // so that we render the entire window
@@ -2478,7 +2488,7 @@ void CHyprRenderer::makeSnapshot(PHLLS pLayer) {
     if (!PMONITOR || !PMONITOR->m_output || PMONITOR->m_pixelSize.x <= 0 || PMONITOR->m_pixelSize.y <= 0)
         return;
 
-    Debug::log(LOG, "renderer: making a snapshot of {:x}", rc<uintptr_t>(pLayer.get()));
+    Log::logger->log(Log::DEBUG, "renderer: making a snapshot of {:x}", rc<uintptr_t>(pLayer.get()));
 
     // we need to "damage" the entire monitor
     // so that we render the entire window
@@ -2515,7 +2525,7 @@ void CHyprRenderer::makeSnapshot(WP<Desktop::View::CPopup> popup) {
     if (!popup->aliveAndVisible())
         return;
 
-    Debug::log(LOG, "renderer: making a snapshot of {:x}", rc<uintptr_t>(popup.get()));
+    Log::logger->log(Log::DEBUG, "renderer: making a snapshot of {:x}", rc<uintptr_t>(popup.get()));
 
     CRegion fakeDamage{0, 0, PMONITOR->m_transformedSize.x, PMONITOR->m_transformedSize.y};
 

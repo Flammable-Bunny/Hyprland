@@ -328,8 +328,6 @@ namespace Desktop::View {
         PHLWINDOW                  getSwallower();
         bool                       isX11OverrideRedirect();
         bool                       isModal();
-        Vector2D                   requestedMinSize();
-        Vector2D                   requestedMaxSize();
         Vector2D                   realToReportSize();
         Vector2D                   realToReportPosition();
         Vector2D                   xwaylandSizeToReal(Vector2D size);
@@ -347,6 +345,8 @@ namespace Desktop::View {
         SP<CWLSurfaceResource>     getSolitaryResource();
         Vector2D                   getReportedSize();
         std::optional<Vector2D>    calculateExpression(const std::string& s);
+        std::optional<Vector2D>    minSize();
+        std::optional<Vector2D>    maxSize();
 
         CBox                       getWindowMainSurfaceBox() const {
             return {m_realPosition->value().x, m_realPosition->value().y, m_realSize->value().x, m_realSize->value().y};

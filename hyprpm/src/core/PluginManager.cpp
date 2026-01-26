@@ -11,6 +11,7 @@
 #include <cstdio>
 #include <iostream>
 #include <filesystem>
+#include <string>
 #include <print>
 #include <fstream>
 #include <algorithm>
@@ -131,12 +132,11 @@ bool CPluginManager::addNewPluginRepo(const std::string& url, const std::string&
     const auto HLVER = getHyprlandVersion();
 
     if (!hasDeps()) {
-        std::println(stderr, "\n{}",
-                     failureString("Could not clone the plugin repository. Dependencies not satisfied. Hyprpm requires: cmake, meson, cpio, pkg-config, git, g++, gcc"));
+        std::println(stderr, "\n{}", failureString("Could not clone the plugin repository. Dependencies not satisfied. Hyprpm requires: cmake, cpio, pkg-config, git, g++, gcc"));
         return false;
     }
 
-    if (DataState::pluginRepoExists(url)) {
+    if (DataState::pluginRepoExists(SPluginRepoIdentifier::fromUrl(url))) {
         std::println(stderr, "\n{}", failureString("Could not clone the plugin repository. Repository already installed."));
         return false;
     }
@@ -302,7 +302,7 @@ bool CPluginManager::addNewPluginRepo(const std::string& url, const std::string&
         progress.printMessageAbove(infoString("Building {}", p.name));
 
         for (auto const& bs : p.buildSteps) {
-            const std::string& cmd = std::format("cd {} && PKG_CONFIG_PATH=\"{}/share/pkgconfig\" {}", m_szWorkingPluginDirectory, DataState::getHeadersPath(), bs);
+            const std::string& cmd = std::format("cd {} && PKG_CONFIG_PATH='{}' {}", m_szWorkingPluginDirectory, getPkgConfigPath(), bs);
             out += " -> " + cmd + "\n" + execAndGet(cmd) + "\n";
         }
 
@@ -333,10 +333,13 @@ bool CPluginManager::addNewPluginRepo(const std::string& url, const std::string&
     std::string       repohash = execAndGet("cd " + m_szWorkingPluginDirectory + " && git rev-parse HEAD");
     if (repohash.length() > 0)
         repohash.pop_back();
-    repo.name = pManifest->m_repository.name.empty() ? url.substr(url.find_last_of('/') + 1) : pManifest->m_repository.name;
-    repo.url  = url;
-    repo.rev  = rev;
-    repo.hash = repohash;
+    auto lastSlash       = url.find_last_of('/');
+    auto secondLastSlash = url.find_last_of('/', lastSlash - 1);
+    repo.name            = pManifest->m_repository.name.empty() ? url.substr(lastSlash + 1) : pManifest->m_repository.name;
+    repo.author          = url.substr(secondLastSlash + 1, lastSlash - secondLastSlash - 1);
+    repo.url             = url;
+    repo.rev             = rev;
+    repo.hash            = repohash;
     for (auto const& p : pManifest->m_plugins) {
         repo.plugins.push_back(SPlugin{p.name, m_szWorkingPluginDirectory + "/" + p.output, false, p.failed});
     }
@@ -356,13 +359,13 @@ bool CPluginManager::addNewPluginRepo(const std::string& url, const std::string&
     return true;
 }
 
-bool CPluginManager::removePluginRepo(const std::string& urlOrName) {
-    if (!DataState::pluginRepoExists(urlOrName)) {
+bool CPluginManager::removePluginRepo(const SPluginRepoIdentifier identifier) {
+    if (!DataState::pluginRepoExists(identifier)) {
         std::println(stderr, "\n{}", failureString("Could not remove the repository. Repository is not installed."));
         return false;
     }
 
-    std::cout << Colors::YELLOW << "!" << Colors::RESET << Colors::RED << " removing a plugin repository: " << Colors::RESET << urlOrName << "\n  "
+    std::cout << Colors::YELLOW << "!" << Colors::RESET << Colors::RED << " removing a plugin repository: " << Colors::RESET << identifier.toString() << "\n  "
               << "Are you sure? [Y/n] ";
     std::fflush(stdout);
     std::string input;
@@ -373,7 +376,7 @@ bool CPluginManager::removePluginRepo(const std::string& urlOrName) {
         return false;
     }
 
-    DataState::removePluginRepo(urlOrName);
+    DataState::removePluginRepo(identifier);
 
     return true;
 }
@@ -385,7 +388,7 @@ eHeadersErrors CPluginManager::headersValid() {
         return HEADERS_MISSING;
 
     // find headers commit
-    const std::string& cmd     = std::format("PKG_CONFIG_PATH=\"{}/share/pkgconfig\" pkgconf --cflags --keep-system-cflags hyprland", DataState::getHeadersPath());
+    const std::string& cmd     = std::format("PKG_CONFIG_PATH='{}' pkgconf --cflags --keep-system-cflags hyprland", getPkgConfigPath());
     auto               headers = execAndGet(cmd);
 
     if (!headers.contains("-I/"))
@@ -444,13 +447,12 @@ eHeadersErrors CPluginManager::headersValid() {
 }
 
 bool CPluginManager::updateHeaders(bool force) {
-
     DataState::ensureStateStoreExists();
 
     const auto HLVER = getHyprlandVersion(false);
 
     if (!hasDeps()) {
-        std::println("\n{}", failureString("Could not update. Dependencies not satisfied. Hyprpm requires: cmake, meson, cpio, pkg-config, git, g++, gcc"));
+        std::println("\n{}", failureString("Could not update. Dependencies not satisfied. Hyprpm requires: cmake, cpio, pkg-config, git, g++, gcc"));
         return false;
     }
 
@@ -539,7 +541,7 @@ bool CPluginManager::updateHeaders(bool force) {
     if (m_bVerbose)
         progress.printMessageAbove(verboseString("setting PREFIX for cmake to {}", DataState::getHeadersPath()));
 
-    ret = execAndGet(std::format("cd {} && cmake --no-warn-unused-cli -DCMAKE_BUILD_TYPE:STRING=Release -DCMAKE_INSTALL_PREFIX:STRING=\"{}\" -S . -B ./build -G Ninja", WORKINGDIR,
+    ret = execAndGet(std::format("cd {} && cmake --no-warn-unused-cli -DCMAKE_BUILD_TYPE:STRING=Release -DCMAKE_INSTALL_PREFIX:STRING=\"{}\" -S . -B ./build", WORKINGDIR,
                                  DataState::getHeadersPath()));
     if (m_bVerbose)
         progress.printMessageAbove(verboseString("cmake returned: {}", ret));
@@ -738,7 +740,7 @@ bool CPluginManager::updatePlugins(bool forceUpdateAll) {
             progress.printMessageAbove(infoString("Building {}", p.name));
 
             for (auto const& bs : p.buildSteps) {
-                const std::string& cmd = std::format("cd {} && PKG_CONFIG_PATH=\"{}/share/pkgconfig\" {}", m_szWorkingPluginDirectory, DataState::getHeadersPath(), bs);
+                const std::string& cmd = std::format("cd {} && PKG_CONFIG_PATH='{}' {}", m_szWorkingPluginDirectory, getPkgConfigPath(), bs);
                 out += " -> " + cmd + "\n" + execAndGet(cmd) + "\n";
             }
 
@@ -772,7 +774,7 @@ bool CPluginManager::updatePlugins(bool forceUpdateAll) {
             const auto OLDPLUGINIT = std::find_if(repo.plugins.begin(), repo.plugins.end(), [&](const auto& other) { return other.name == p.name; });
             newrepo.plugins.push_back(SPlugin{p.name, m_szWorkingPluginDirectory + "/" + p.output, OLDPLUGINIT != repo.plugins.end() ? OLDPLUGINIT->enabled : false});
         }
-        DataState::removePluginRepo(newrepo.name);
+        DataState::removePluginRepo(SPluginRepoIdentifier::fromName(newrepo.name));
         DataState::addNewPluginRepo(newrepo);
 
         std::filesystem::remove_all(m_szWorkingPluginDirectory);
@@ -797,17 +799,23 @@ bool CPluginManager::updatePlugins(bool forceUpdateAll) {
     return true;
 }
 
-bool CPluginManager::enablePlugin(const std::string& name) {
-    bool ret = DataState::setPluginEnabled(name, true);
+bool CPluginManager::enablePlugin(const SPluginRepoIdentifier identifier) {
+    bool ret = false;
+
+    switch (identifier.type) {
+        case IDENTIFIER_NAME:
+        case IDENTIFIER_AUTHOR_NAME: ret = DataState::setPluginEnabled(identifier, true); break;
+        default: return false;
+    }
     if (ret)
-        std::println("{}", successString("Enabled {}", name));
+        std::println("{}", successString("Enabled {}", identifier.name));
     return ret;
 }
 
-bool CPluginManager::disablePlugin(const std::string& name) {
-    bool ret = DataState::setPluginEnabled(name, false);
+bool CPluginManager::disablePlugin(const SPluginRepoIdentifier identifier) {
+    bool ret = DataState::setPluginEnabled(identifier, false);
     if (ret)
-        std::println("{}", successString("Disabled {}", name));
+        std::println("{}", successString("Disabled {}", identifier.name));
     return ret;
 }
 
@@ -928,7 +936,7 @@ void CPluginManager::listAllPlugins() {
     const auto REPOS = DataState::getAllRepositories();
 
     for (auto const& r : REPOS) {
-        std::println("{}", infoString("Repository {}:", r.name));
+        std::println("{}", infoString("Repository {} (by {}):", r.name, r.author));
 
         for (auto const& p : r.plugins) {
             std::println("  │ Plugin {}", p.name);
@@ -979,7 +987,7 @@ std::string CPluginManager::headerErrorShort(const eHeadersErrors err) {
 
 bool CPluginManager::hasDeps() {
     bool                     hasAllDeps = true;
-    std::vector<std::string> deps       = {"meson", "cpio", "cmake", "pkg-config", "g++", "gcc", "git"};
+    std::vector<std::string> deps       = {"cpio", "cmake", "pkg-config", "g++", "gcc", "git"};
 
     for (auto const& d : deps) {
         if (!execAndGet("command -v " + d).contains("/")) {
@@ -989,4 +997,19 @@ bool CPluginManager::hasDeps() {
     }
 
     return hasAllDeps;
+}
+
+const std::string& CPluginManager::getPkgConfigPath() {
+    static bool        once = true;
+    static std::string res;
+    if (once) {
+        once = false;
+
+        if (const auto E = getenv("PKG_CONFIG_PATH"); E && E[0])
+            res = std::format("{}/share/pkgconfig:{}", DataState::getHeadersPath(), E);
+        else
+            res = std::format("{}/share/pkgconfig", DataState::getHeadersPath());
+    }
+
+    return res;
 }

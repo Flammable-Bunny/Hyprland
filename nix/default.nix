@@ -90,6 +90,7 @@ in
             ../assets/install
             ../hyprctl
             ../hyprland.pc.in
+            ../hyprpm
             ../LICENSE
             ../protocols
             ../src
@@ -97,7 +98,7 @@ in
             ../systemd
             ../VERSION
             (fs.fileFilter (file: file.hasExt "1") ../docs)
-            (fs.fileFilter (file: file.hasExt "conf" || file.hasExt "desktop") ../example)
+            (fs.fileFilter (file: file.hasExt "conf" || file.hasExt "in") ../example)
             (fs.fileFilter (file: file.hasExt "sh") ../scripts)
             (fs.fileFilter (file: file.name == "CMakeLists.txt") ../.)
             (optional withTests [../tests ../hyprtester])
@@ -108,8 +109,9 @@ in
         # Fix hardcoded paths to /usr installation
         sed -i "s#/usr#$out#" src/render/OpenGL.cpp
 
-        # Remove extra @PREFIX@ to fix pkg-config paths
+        # Remove extra @PREFIX@ to fix some paths
         sed -i "s#@PREFIX@/##g" hyprland.pc.in
+        sed -i "s#@PREFIX@/##g" example/hyprland.desktop.in
       '';
 
       env = {
@@ -192,12 +194,12 @@ in
       dontStrip = debug;
 
       cmakeFlags = mapAttrsToList cmakeBool {
+        "BUILT_WITH_NIX" = true;
         "NO_XWAYLAND" = !enableXWayland;
         "LEGACY_RENDERER" = legacyRenderer;
         "NO_SYSTEMD" = !withSystemd;
         "CMAKE_DISABLE_PRECOMPILE_HEADERS" = true;
-        "NO_UWSM" = true;
-        "NO_HYPRPM" = true;
+        "NO_UWSM" = !withSystemd;
         "TRACY_ENABLE" = false;
         "WITH_TESTS" = withTests;
       };
@@ -222,11 +224,13 @@ in
         ${optionalString withTests ''
           install hyprtester/pointer-warp -t $out/bin
           install hyprtester/pointer-scroll -t $out/bin
+          install hyprtester/shortcut-inhibitor -t $out/bin
           install hyprland_gtests -t $out/bin
+          install hyprtester/child-window -t $out/bin
         ''}
       '';
 
-      passthru.providedSessions = ["hyprland"];
+      passthru.providedSessions = ["hyprland"] ++ optionals withSystemd ["hyprland-uwsm"];
 
       meta = {
         homepage = "https://github.com/hyprwm/Hyprland";

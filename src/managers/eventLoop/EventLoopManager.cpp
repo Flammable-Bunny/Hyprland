@@ -1,5 +1,5 @@
 #include "EventLoopManager.hpp"
-#include "../../debug/Log.hpp"
+#include "../../debug/log/Logger.hpp"
 #include "../../Compositor.hpp"
 #include "../../config/ConfigWatcher.hpp"
 
@@ -57,7 +57,8 @@ static int configWatcherWrite(int fd, uint32_t mask, void* data) {
 
 static int handleWaiterFD(int fd, uint32_t mask, void* data) {
     if (mask & (WL_EVENT_HANGUP | WL_EVENT_ERROR)) {
-        Debug::log(ERR, "handleWaiterFD: readable waiter error");
+        Log::logger->log(Log::ERR, "handleWaiterFD: readable waiter error");
+        g_pEventLoopManager->onFdReadableFail(sc<CEventLoopManager::SReadableWaiter*>(data));
         return 0;
     }
 
@@ -81,6 +82,16 @@ void CEventLoopManager::onFdReadable(SReadableWaiter* waiter) {
         taken->fn();
 }
 
+void CEventLoopManager::onFdReadableFail(SReadableWaiter* waiter) {
+    auto it = std::ranges::find_if(m_readableWaiters, [waiter](const UP<SReadableWaiter>& w) { return waiter == w.get() && w->fd == waiter->fd && w->source == waiter->source; });
+
+    // ???
+    if (it == m_readableWaiters.end())
+        return;
+
+    m_readableWaiters.erase(it);
+}
+
 void CEventLoopManager::enterLoop() {
     m_wayland.eventSource = wl_event_loop_add_fd(m_wayland.loop, m_timers.timerfd.get(), WL_EVENT_READABLE, timerWrite, nullptr);
 
@@ -96,7 +107,7 @@ void CEventLoopManager::enterLoop() {
 
     wl_display_run(m_wayland.display);
 
-    Debug::log(LOG, "Kicked off the event loop! :(");
+    Log::logger->log(Log::DEBUG, "Kicked off the event loop! :(");
 }
 
 void CEventLoopManager::onTimerFire() {

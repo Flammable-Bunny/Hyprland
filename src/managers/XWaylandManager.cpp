@@ -30,13 +30,13 @@ void CHyprXWaylandManager::activateSurface(SP<CWLSurfaceResource> pSurface, bool
 
     auto HLSurface = Desktop::View::CWLSurface::fromResource(pSurface);
     if (!HLSurface) {
-        Debug::log(TRACE, "CHyprXWaylandManager::activateSurface on non-desktop surface, ignoring");
+        Log::logger->log(Log::TRACE, "CHyprXWaylandManager::activateSurface on non-desktop surface, ignoring");
         return;
     }
 
     const auto PWINDOW = Desktop::View::CWindow::fromView(HLSurface->view());
     if (!PWINDOW) {
-        Debug::log(TRACE, "CHyprXWaylandManager::activateSurface on non-window surface, ignoring");
+        Log::logger->log(Log::TRACE, "CHyprXWaylandManager::activateSurface on non-window surface, ignoring");
         return;
     }
 
@@ -87,6 +87,14 @@ CBox CHyprXWaylandManager::getGeometryForWindow(PHLWINDOW pWindow) {
         box = pWindow->m_xwaylandSurface->m_geometry;
     else if (pWindow->m_xdgSurface)
         box = pWindow->m_xdgSurface->m_current.geometry;
+
+    Vector2D MINSIZE = pWindow->minSize().value_or(Vector2D{MIN_WINDOW_SIZE, MIN_WINDOW_SIZE});
+    Vector2D MAXSIZE = pWindow->maxSize().value_or(Math::VECTOR2D_MAX).clamp(MINSIZE + Vector2D{1, 1});
+
+    Vector2D oldSize = box.size();
+    box.w            = std::clamp(box.w, MINSIZE.x, MAXSIZE.x);
+    box.h            = std::clamp(box.h, MINSIZE.y, MAXSIZE.y);
+    box.translate((oldSize - box.size()) / 2.F);
 
     return box;
 }

@@ -75,7 +75,7 @@ class CCompositor {
     void                                         cleanup();
     void                                         bumpNofile();
     void                                         restoreNofile();
-    void                                         setWatchdogFd(int fd);
+    bool                                         setWatchdogFd(int fd);
 
     bool                                         m_readyToProcess = false;
     bool                                         m_sessionActive  = true;
@@ -170,8 +170,8 @@ class CCompositor {
     void                                ensurePersistentWorkspacesPresent(const std::vector<SWorkspaceRule>& rules, PHLWORKSPACE pWorkspace = nullptr);
     std::optional<unsigned int>         getVTNr();
 
-    NColorManagement::SImageDescription getPreferredImageDescription();
-    NColorManagement::SImageDescription getHDRImageDescription();
+    NColorManagement::PImageDescription getPreferredImageDescription();
+    NColorManagement::PImageDescription getHDRImageDescription();
     bool                                shouldChangePreferredImageDescription();
 
     bool                                supportsDrmSyncobjTimeline() const;

@@ -277,19 +277,19 @@ void CWLSurfaceResource::enter(PHLMONITOR monitor) {
 
     if UNLIKELY (!PROTO::outputs.contains(monitor->m_name)) {
         // can happen on unplug/replug
-        LOGM(ERR, "enter() called on a non-existent output global");
+        LOGM(Log::ERR, "enter() called on a non-existent output global");
         return;
     }
 
     if UNLIKELY (PROTO::outputs.at(monitor->m_name)->isDefunct()) {
-        LOGM(ERR, "enter() called on a defunct output global");
+        LOGM(Log::ERR, "enter() called on a defunct output global");
         return;
     }
 
     auto output = PROTO::outputs.at(monitor->m_name)->outputResourceFrom(m_client);
 
     if UNLIKELY (!output || !output->getResource() || !output->getResource()->resource()) {
-        LOGM(ERR, "Cannot enter surface {:x} to {}, client hasn't bound the output", (uintptr_t)this, monitor->m_name);
+        LOGM(Log::ERR, "Cannot enter surface {:x} to {}, client hasn't bound the output", (uintptr_t)this, monitor->m_name);
         return;
     }
 
@@ -306,7 +306,7 @@ void CWLSurfaceResource::leave(PHLMONITOR monitor) {
     auto output = PROTO::outputs.at(monitor->m_name)->outputResourceFrom(m_client);
 
     if UNLIKELY (!output) {
-        LOGM(ERR, "Cannot leave surface {:x} from {}, client hasn't bound the output", (uintptr_t)this, monitor->m_name);
+        LOGM(Log::ERR, "Cannot leave surface {:x} from {}, client hasn't bound the output", (uintptr_t)this, monitor->m_name);
         return;
     }
 
@@ -500,16 +500,19 @@ void CWLSurfaceResource::scheduleState(WP<SSurfaceState> state) {
 
     if (state->updated.bits.acquire) {
         // wait on acquire point for this surface, from explicit sync protocol
-        state->acquire.addWaiter([state, whenReadable]() { whenReadable(state, LOCK_REASON_FENCE); });
+        if (!state->acquire.addWaiter([state, whenReadable]() { whenReadable(state, LOCK_REASON_FENCE); })) {
+            Log::logger->log(Log::ERR, "Failed to addWaiter in CWLSurfaceResource::scheduleState");
+            whenReadable(state, LOCK_REASON_FENCE);
+        }
     } else if (state->buffer && state->buffer->isSynchronous()) {
         // synchronous (shm) buffers can be read immediately
-        m_stateQueue.unlock(state);
+        m_stateQueue.unlock(state, LOCK_REASON_FENCE);
     } else if (state->buffer && state->buffer->m_syncFd.isValid()) {
         // async buffer and is dmabuf, then we can wait on implicit fences
         g_pEventLoopManager->doOnReadable(std::move(state->buffer->m_syncFd), [state, whenReadable]() { whenReadable(state, LOCK_REASON_FENCE); });
     } else {
         // state commit without a buffer.
-        m_stateQueue.unlock(state);
+        m_stateQueue.unlock(state, LOCK_REASON_FENCE);
     }
 }
 
@@ -528,7 +531,7 @@ void CWLSurfaceResource::commitState(SSurfaceState& state) {
     }
 
     if (m_current.texture)
-        m_current.texture->m_transform = wlTransformToHyprutils(m_current.transform);
+        m_current.texture->m_transform = Math::wlTransformToHyprutils(m_current.transform);
 
     if (m_role->role() == SURFACE_ROLE_SUBSURFACE) {
         auto subsurface = sc<CSubsurfaceRole*>(m_role.get())->m_subsurface.lock();
@@ -556,7 +559,7 @@ void CWLSurfaceResource::commitState(SSurfaceState& state) {
         dropCurrentBuffer();
 }
 
-SImageDescription CWLSurfaceResource::getPreferredImageDescription() {
+PImageDescription CWLSurfaceResource::getPreferredImageDescription() {
     static const auto PFORCE_HDR = CConfigValue<Hyprlang::INT>("quirks:prefer_hdr");
     const auto        WINDOW     = m_hlSurface ? Desktop::View::CWindow::fromView(m_hlSurface->view()) : nullptr;
 
@@ -627,7 +630,7 @@ void CWLSurfaceResource::updateCursorShm(CRegion damage) {
     auto  shmAttrs = buf->shm();
 
     if (!shmAttrs.success) {
-        LOGM(TRACE, "updateCursorShm: ignoring, not a shm buffer");
+        LOGM(Log::TRACE, "updateCursorShm: ignoring, not a shm buffer");
         return;
     }
 
@@ -681,7 +684,7 @@ CWLCompositorResource::CWLCompositorResource(SP<CWlCompositor> resource_) : m_re
         RESOURCE->m_self       = RESOURCE;
         RESOURCE->m_stateQueue = CSurfaceStateQueue(RESOURCE);
 
-        LOGM(LOG, "New wl_surface with id {} at {:x}", id, (uintptr_t)RESOURCE.get());
+        LOGM(Log::DEBUG, "New wl_surface with id {} at {:x}", id, (uintptr_t)RESOURCE.get());
 
         PROTO::compositor->m_events.newSurface.emit(RESOURCE);
     });
@@ -697,7 +700,7 @@ CWLCompositorResource::CWLCompositorResource(SP<CWlCompositor> resource_) : m_re
 
         RESOURCE->m_self = RESOURCE;
 
-        LOGM(LOG, "New wl_region with id {} at {:x}", id, (uintptr_t)RESOURCE.get());
+        LOGM(Log::DEBUG, "New wl_region with id {} at {:x}", id, (uintptr_t)RESOURCE.get());
     });
 }
 

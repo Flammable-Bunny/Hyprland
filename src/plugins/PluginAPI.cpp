@@ -350,11 +350,11 @@ APICALL std::vector<SFunctionMatch> HyprlandAPI::findFunctionsByName(HANDLE hand
     };
 
     if (SYMBOLS.empty()) {
-        Debug::log(ERR, R"(Unable to search for function "{}": no symbols found in binary (is "{}" in path?))", name,
+        Log::logger->log(Log::ERR, R"(Unable to search for function "{}": no symbols found in binary (is "{}" in path?))", name,
 #ifdef __clang__
-                   "llvm-nm"
+                         "llvm-nm"
 #else
-                   "nm"
+                         "nm"
 #endif
         );
         return {};
@@ -407,7 +407,7 @@ APICALL bool HyprlandAPI::unregisterHyprCtlCommand(HANDLE handle, SP<SHyprCtlCom
     if (!PLUGIN)
         return false;
 
-    std::erase(PLUGIN->m_registeredHyprctlCommands, cmd);
+    std::erase_if(PLUGIN->m_registeredHyprctlCommands, [&](const auto& other) { return !other || other == cmd; });
     g_pHyprCtl->unregisterCommand(cmd);
 
     return true;

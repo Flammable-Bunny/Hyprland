@@ -84,7 +84,7 @@ CDMABuffer::CDMABuffer(uint32_t id, wl_client* client, Aquamarine::SDMABUFAttrs 
     m_success = m_texture->m_texID;
 
     if UNLIKELY (!m_success)
-        Debug::log(ERR, "Failed to create a dmabuf: texture is null");
+        Log::logger->log(Log::ERR, "Failed to create a dmabuf: texture is null");
 }
 
 CDMABuffer::~CDMABuffer() {

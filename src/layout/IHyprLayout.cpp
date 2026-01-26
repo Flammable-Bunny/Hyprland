@@ -24,7 +24,7 @@ void IHyprLayout::onWindowCreated(PHLWINDOW pWindow, eDirection direction) {
     const auto STOREDSIZE = HASPERSISTENTSIZE ? g_pConfigManager->getStoredFloatingSize(pWindow) : std::nullopt;
 
     if (STOREDSIZE.has_value()) {
-        Debug::log(LOG, "using stored size {}x{} for new window {}::{}", STOREDSIZE->x, STOREDSIZE->y, pWindow->m_class, pWindow->m_title);
+        Log::logger->log(Log::DEBUG, "using stored size {}x{} for new window {}::{}", STOREDSIZE->x, STOREDSIZE->y, pWindow->m_class, pWindow->m_title);
         pWindow->m_lastFloatingSize = STOREDSIZE.value();
     } else if (desiredGeometry.width <= 5 || desiredGeometry.height <= 5) {
         const auto PMONITOR         = pWindow->m_monitor.lock();
@@ -117,7 +117,7 @@ void IHyprLayout::onWindowCreatedFloating(PHLWINDOW pWindow) {
     static auto PXWLFORCESCALEZERO = CConfigValue<Hyprlang::INT>("xwayland:force_zero_scaling");
 
     if (!PMONITOR) {
-        Debug::log(ERR, "{:m} has an invalid monitor in onWindowCreatedFloating!!!", pWindow);
+        Log::logger->log(Log::ERR, "{:m} has an invalid monitor in onWindowCreatedFloating!!!", pWindow);
         return;
     }
 
@@ -248,7 +248,7 @@ void IHyprLayout::onBeginDragWindow() {
 
     // Window will be floating. Let's check if it's valid. It should be, but I don't like crashing.
     if (!validMapped(DRAGGINGWINDOW)) {
-        Debug::log(ERR, "Dragging attempted on an invalid window!");
+        Log::logger->log(Log::ERR, "Dragging attempted on an invalid window!");
         CKeybindManager::changeMouseBindMode(MBIND_INVALID);
         return;
     }
@@ -647,12 +647,8 @@ void IHyprLayout::onMouseMove(const Vector2D& mousePos) {
     } else if (g_pInputManager->m_dragMode == MBIND_RESIZE || g_pInputManager->m_dragMode == MBIND_RESIZE_FORCE_RATIO || g_pInputManager->m_dragMode == MBIND_RESIZE_BLOCK_RATIO) {
         if (DRAGGINGWINDOW->m_isFloating) {
 
-            Vector2D MINSIZE = DRAGGINGWINDOW->requestedMinSize().clamp(DRAGGINGWINDOW->m_ruleApplicator->minSize().valueOr(Vector2D(MIN_WINDOW_SIZE, MIN_WINDOW_SIZE)));
-            Vector2D MAXSIZE;
-            if (DRAGGINGWINDOW->m_ruleApplicator->maxSize().hasValue())
-                MAXSIZE = DRAGGINGWINDOW->requestedMaxSize().clamp({}, DRAGGINGWINDOW->m_ruleApplicator->maxSize().value());
-            else
-                MAXSIZE = DRAGGINGWINDOW->requestedMaxSize().clamp({}, Vector2D(std::numeric_limits<double>::max(), std::numeric_limits<double>::max()));
+            Vector2D MINSIZE = DRAGGINGWINDOW->minSize().value_or(Vector2D{MIN_WINDOW_SIZE, MIN_WINDOW_SIZE});
+            Vector2D MAXSIZE = DRAGGINGWINDOW->maxSize().value_or(Math::VECTOR2D_MAX);
 
             Vector2D newSize = m_beginDragSizeXY;
             Vector2D newPos  = m_beginDragPositionXY;
@@ -745,7 +741,7 @@ void IHyprLayout::onMouseMove(const Vector2D& mousePos) {
 void IHyprLayout::changeWindowFloatingMode(PHLWINDOW pWindow) {
 
     if (pWindow->isFullscreen()) {
-        Debug::log(LOG, "changeWindowFloatingMode: fullscreen");
+        Log::logger->log(Log::DEBUG, "changeWindowFloatingMode: fullscreen");
         g_pCompositor->setWindowFullscreenInternal(pWindow, FSMODE_NONE);
     }
 
@@ -864,7 +860,7 @@ void IHyprLayout::moveActiveWindow(const Vector2D& delta, PHLWINDOW pWindow) {
         return;
 
     if (!PWINDOW->m_isFloating) {
-        Debug::log(LOG, "Dwindle cannot move a tiled window in moveActiveWindow!");
+        Log::logger->log(Log::DEBUG, "Dwindle cannot move a tiled window in moveActiveWindow!");
         return;
     }
 
@@ -970,7 +966,7 @@ Vector2D IHyprLayout::predictSizeForNewWindowFloating(PHLWINDOW pWindow) { // ge
         const auto STOREDSIZE = HASPERSISTENTSIZE ? g_pConfigManager->getStoredFloatingSize(pWindow) : std::nullopt;
 
         if (STOREDSIZE.has_value()) {
-            Debug::log(LOG, "using stored size {}x{} for new floating window {}::{}", STOREDSIZE->x, STOREDSIZE->y, pWindow->m_class, pWindow->m_title);
+            Log::logger->log(Log::DEBUG, "using stored size {}x{} for new floating window {}::{}", STOREDSIZE->x, STOREDSIZE->y, pWindow->m_class, pWindow->m_title);
             return STOREDSIZE.value();
         }
 
@@ -1008,14 +1004,14 @@ bool IHyprLayout::updateDragWindow() {
 
     if (g_pInputManager->m_dragThresholdReached) {
         if (WAS_FULLSCREEN) {
-            Debug::log(LOG, "Dragging a fullscreen window");
+            Log::logger->log(Log::DEBUG, "Dragging a fullscreen window");
             g_pCompositor->setWindowFullscreenInternal(DRAGGINGWINDOW, FSMODE_NONE);
         }
 
         const auto PWORKSPACE = DRAGGINGWINDOW->m_workspace;
 
         if (PWORKSPACE->m_hasFullscreenWindow && (!DRAGGINGWINDOW->m_isFloating || (!DRAGGINGWINDOW->m_createdOverFullscreen && !DRAGGINGWINDOW->m_pinned))) {
-            Debug::log(LOG, "Rejecting drag on a fullscreen workspace. (window under fullscreen)");
+            Log::logger->log(Log::DEBUG, "Rejecting drag on a fullscreen workspace. (window under fullscreen)");
             g_pKeybindManager->changeMouseBindMode(MBIND_INVALID);
             return true;
         }
@@ -1028,7 +1024,7 @@ bool IHyprLayout::updateDragWindow() {
         const auto MOUSECOORDS          = g_pInputManager->getMouseCoordsInternal();
         *DRAGGINGWINDOW->m_realPosition = MOUSECOORDS - DRAGGINGWINDOW->m_realSize->goal() / 2.f;
     } else if (!DRAGGINGWINDOW->m_isFloating && g_pInputManager->m_dragMode == MBIND_MOVE) {
-        Vector2D MINSIZE = DRAGGINGWINDOW->requestedMinSize().clamp(DRAGGINGWINDOW->m_ruleApplicator->minSize().valueOr(Vector2D(MIN_WINDOW_SIZE, MIN_WINDOW_SIZE)));
+        Vector2D MINSIZE                   = DRAGGINGWINDOW->minSize().value_or(Vector2D{MIN_WINDOW_SIZE, MIN_WINDOW_SIZE});
         DRAGGINGWINDOW->m_lastFloatingSize = (DRAGGINGWINDOW->m_realSize->goal() * 0.8489).clamp(MINSIZE, Vector2D{}).floor();
         *DRAGGINGWINDOW->m_realPosition    = g_pInputManager->getMouseCoordsInternal() - DRAGGINGWINDOW->m_realSize->goal() / 2.f;
         if (g_pInputManager->m_dragThresholdReached) {

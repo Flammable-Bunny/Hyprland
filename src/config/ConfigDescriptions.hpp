@@ -1116,6 +1116,12 @@ inline static const std::vector<SConfigOptionDescription> CONFIG_OPTIONS = {
         .data        = SConfigOptionDescription::SRangeData{0, -20, 20},
     },
     SConfigOptionDescription{
+        .value       = "group:groupbar:text_padding",
+        .description = "set horizontal padding for a text",
+        .type        = CONFIG_OPTION_BOOL,
+        .data        = SConfigOptionDescription::SRangeData{0, 0, 22},
+    },
+    SConfigOptionDescription{
         .value       = "group:groupbar:blur",
         .description = "enable background blur for groupbars",
         .type        = CONFIG_OPTION_BOOL,
@@ -1562,10 +1568,10 @@ inline static const std::vector<SConfigOptionDescription> CONFIG_OPTIONS = {
     },
     SConfigOptionDescription{
         .value       = "render:cm_sdr_eotf",
-        .description = "Default transfer function for displaying SDR apps. 0 - Treat unspecified as sRGB, 1 - Treat unspecified as Gamma 2.2, 2 - Treat "
-                       "unspecified and sRGB as Gamma 2.2",
+        .description = "Default transfer function for displaying SDR apps. 0 - Use default value (Gamma 2.2), 1 - Treat unspecified as Gamma 2.2, 2 - Treat "
+                       "unspecified and sRGB as Gamma 2.2, 3 - Treat unspecified as sRGB",
         .type        = CONFIG_OPTION_CHOICE,
-        .data        = SConfigOptionDescription::SChoiceData{0, "srgb,gamma22,gamma22force"},
+        .data        = SConfigOptionDescription::SChoiceData{0, "default,gamma22,gamma22force,srgb"},
     },
 
     /*
@@ -1659,6 +1665,12 @@ inline static const std::vector<SConfigOptionDescription> CONFIG_OPTIONS = {
         .data        = SConfigOptionDescription::SBoolData{false},
     },
     SConfigOptionDescription{
+        .value       = "cursor:zoom_detached_camera",
+        .description = "Detaches the camera from the mouse when zoomed in, only ever moving to keep the mouse in view",
+        .type        = CONFIG_OPTION_BOOL,
+        .data        = SConfigOptionDescription::SBoolData{true},
+    },
+    SConfigOptionDescription{
         .value       = "cursor:enable_hyprcursor",
         .description = "whether to enable hyprcursor support",
         .type        = CONFIG_OPTION_BOOL,
@@ -1673,6 +1685,12 @@ inline static const std::vector<SConfigOptionDescription> CONFIG_OPTIONS = {
     SConfigOptionDescription{
         .value       = "cursor:hide_on_touch",
         .description = "Hides the cursor when the last input was a touch input until a mouse input is done.",
+        .type        = CONFIG_OPTION_BOOL,
+        .data        = SConfigOptionDescription::SBoolData{true},
+    },
+    SConfigOptionDescription{
+        .value       = "cursor:hide_on_tablet",
+        .description = "Hides the cursor when the last input was a tablet input until a mouse input is done.",
         .type        = CONFIG_OPTION_BOOL,
         .data        = SConfigOptionDescription::SBoolData{true},
     },
@@ -1815,6 +1833,30 @@ inline static const std::vector<SConfigOptionDescription> CONFIG_OPTIONS = {
     SConfigOptionDescription{
         .value       = "debug:full_cm_proto",
         .description = "claims support for all cm proto features (requires restart)",
+        .type        = CONFIG_OPTION_BOOL,
+        .data        = SConfigOptionDescription::SBoolData{false},
+    },
+    SConfigOptionDescription{
+        .value       = "debug:ds_handle_same_buffer",
+        .description = "Special case for DS with unmodified buffer",
+        .type        = CONFIG_OPTION_BOOL,
+        .data        = SConfigOptionDescription::SBoolData{true},
+    },
+    SConfigOptionDescription{
+        .value       = "debug:ds_handle_same_buffer_fifo",
+        .description = "Special case for DS with unmodified buffer unlocks fifo",
+        .type        = CONFIG_OPTION_BOOL,
+        .data        = SConfigOptionDescription::SBoolData{true},
+    },
+    SConfigOptionDescription{
+        .value       = "debug:fifo_pending_workaround",
+        .description = "Fifo workaround for empty pending list",
+        .type        = CONFIG_OPTION_BOOL,
+        .data        = SConfigOptionDescription::SBoolData{true},
+    },
+    SConfigOptionDescription{
+        .value       = "debug:render_solitary_wo_damage",
+        .description = "Render solitary window with empty damage",
         .type        = CONFIG_OPTION_BOOL,
         .data        = SConfigOptionDescription::SBoolData{false},
     },
@@ -1991,17 +2033,6 @@ inline static const std::vector<SConfigOptionDescription> CONFIG_OPTIONS = {
     SConfigOptionDescription{
         .value       = "master:always_keep_position",
         .description = "whether to keep the master window in its configured position when there are no slave windows",
-        .type        = CONFIG_OPTION_BOOL,
-        .data        = SConfigOptionDescription::SBoolData{false},
-    },
-
-    /*
-     * Experimental
-    */
-
-    SConfigOptionDescription{
-        .value       = "experimental:xx_color_management_v4",
-        .description = "enable color management protocol",
         .type        = CONFIG_OPTION_BOOL,
         .data        = SConfigOptionDescription::SBoolData{false},
     },

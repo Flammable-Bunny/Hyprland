@@ -11,6 +11,7 @@
 #include "CMType.hpp"
 
 #include <xf86drmMode.h>
+#include "MonitorZoomController.hpp"
 #include "time/Timer.hpp"
 #include "math/Math.hpp"
 #include "../desktop/reserved/ReservedArea.hpp"
@@ -54,10 +55,10 @@ struct SMonitorRule {
     float                  sdrBrightness = 1.0f; // SDR -> HDR
     Desktop::CReservedArea reservedArea;
 
-    bool                   supportsWideColor = false; // false does nothing, true overrides EDID
-    bool                   supportsHDR       = false; // false does nothing, true overrides EDID
-    float                  sdrMinLuminance   = 0.2f;  // SDR -> HDR
-    int                    sdrMaxLuminance   = 80;    // SDR -> HDR
+    int                    supportsWideColor = 0;    // 0 - auto, 1 - force enable, -1 - force disable
+    int                    supportsHDR       = 0;    // 0 - auto, 1 - force enable, -1 - force disable
+    float                  sdrMinLuminance   = 0.2f; // SDR -> HDR
+    int                    sdrMaxLuminance   = 80;   // SDR -> HDR
 
     // Incorrect values will result in reduced luminance range or incorrect tonemapping. Shouldn't damage the HW. Use with care in case of a faulty monitor firmware.
     float              minLuminance    = -1.0f; // >= 0 overrides EDID
@@ -129,6 +130,8 @@ class CMonitor {
     SP<Aquamarine::CSwapchain>  m_cursorSwapchain;
     uint32_t                    m_drmFormat     = DRM_FORMAT_INVALID;
     uint32_t                    m_prevDrmFormat = DRM_FORMAT_INVALID;
+
+    CMonitorZoomController      m_zoomController;
 
     bool                        m_dpmsStatus       = true;
     bool                        m_vrrActive        = false; // this can be TRUE even if VRR is not active in the case that this display does not support it.
@@ -321,17 +324,24 @@ class CMonitor {
     float       minLuminance(float defaultValue = 0);
     int         maxLuminance(int defaultValue = 80);
     int         maxAvgLuminance(int defaultValue = 80);
+    float       maxFALL();
+    float       maxCLL();
 
     bool        wantsWideColor();
     bool        wantsHDR();
 
     bool        inHDR();
 
-    /// Has an active workspace with a real fullscreen window
-    bool                                               inFullscreenMode();
-    std::optional<NColorManagement::SImageDescription> getFSImageDescription();
+    /// Has an active workspace with a real fullscreen window (includes special workspace)
+    bool inFullscreenMode();
+    /// Get fullscreen window from active or special workspace
+    PHLWINDOW                                                   getFullscreenWindow();
+    std::optional<NColorManagement::PImageDescription>          getFSImageDescription();
 
-    bool                                               needsCM();
+    NColorManagement::SPCPRimaries                              getMasteringPrimaries();
+    NColorManagement::SImageDescription::SPCMasteringLuminances getMasteringLuminances();
+
+    bool                                                        needsCM();
     /// Can do CM without shader
     bool                                canNoShaderCM();
     bool                                doesNoShaderCM();
@@ -342,7 +352,7 @@ class CMonitor {
     PHLWINDOWREF                        m_previousFSWindow;
     bool                                m_needsHDRupdate = false;
 
-    NColorManagement::SImageDescription m_imageDescription;
+    NColorManagement::PImageDescription m_imageDescription;
     bool                                m_noShaderCTM = false; // sets drm CTM, restore needed
 
     // For the list lookup
@@ -350,10 +360,6 @@ class CMonitor {
     bool operator==(const CMonitor& rhs) {
         return m_position == rhs.m_position && m_size == rhs.m_size && m_name == rhs.m_name;
     }
-
-    // workspace previous per monitor functionality
-    SWorkspaceIDName getPrevWorkspaceIDName(const WORKSPACEID id);
-    void             addPrevWorkspaceID(const WORKSPACEID id);
 
   private:
     void                    setupDefaultWS(const SMonitorRule&);
@@ -372,8 +378,8 @@ class CMonitor {
         CHyprSignalListener commit;
     } m_listeners;
 
-    bool  m_supportsWideColor = false;
-    bool  m_supportsHDR       = false;
+    int   m_supportsWideColor = 0;
+    int   m_supportsHDR       = 0;
     float m_minLuminance      = -1.0f;
     int   m_maxLuminance      = -1;
     int   m_maxAvgLuminance   = -1;

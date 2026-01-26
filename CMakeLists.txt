@@ -128,7 +128,7 @@ find_package(OpenGL REQUIRED COMPONENTS ${GLES_VERSION})
 set(AQUAMARINE_MINIMUM_VERSION 0.9.3)
 set(HYPRLANG_MINIMUM_VERSION 0.6.7)
 set(HYPRCURSOR_MINIMUM_VERSION 0.1.7)
-set(HYPRUTILS_MINIMUM_VERSION 0.10.2)
+set(HYPRUTILS_MINIMUM_VERSION 0.11.0)
 set(HYPRGRAPHICS_MINIMUM_VERSION 0.1.6)
 
 pkg_check_modules(aquamarine_dep REQUIRED IMPORTED_TARGET aquamarine>=${AQUAMARINE_MINIMUM_VERSION})
@@ -298,27 +298,33 @@ if(CMAKE_BUILD_TYPE MATCHES Debug OR CMAKE_BUILD_TYPE MATCHES DEBUG)
     target_compile_options(hyprland_lib PUBLIC -fsanitize=address)
   endif()
 
-  if(USE_TRACY)
-    message(STATUS "Tracy is turned on")
-
-    option(TRACY_ENABLE "" ON)
-    option(TRACY_ON_DEMAND "" ON)
-    add_subdirectory(subprojects/tracy)
-
-    target_link_libraries(hyprland_lib PUBLIC Tracy::TracyClient)
-
-    if(USE_TRACY_GPU)
-      message(STATUS "Tracy GPU Profiling is turned on")
-      add_compile_definitions(USE_TRACY_GPU)
-    endif()
-  endif()
-
   add_compile_options(-fno-pie -fno-builtin)
   add_link_options(-no-pie -fno-builtin)
   if(USE_GPROF)
     add_compile_options(-pg)
     add_link_options(-pg)
   endif()
+endif()
+
+if(USE_TRACY)
+  message(STATUS "Tracy is turned on")
+
+  option(TRACY_ENABLE "" ON)
+  option(TRACY_ON_DEMAND "" ON)
+  add_subdirectory(subprojects/tracy)
+
+  add_compile_options(-fno-omit-frame-pointer)
+
+  target_link_libraries(hyprland_lib PUBLIC Tracy::TracyClient)
+
+  if(USE_TRACY_GPU)
+    message(STATUS "Tracy GPU Profiling is turned on")
+    add_compile_definitions(USE_TRACY_GPU)
+  endif()
+endif()
+
+if(BUILT_WITH_NIX)
+  add_compile_definitions(BUILT_WITH_NIX)
 endif()
 
 check_include_file("execinfo.h" EXECINFOH)
@@ -498,8 +504,6 @@ protocolnew("protocols" "kde-server-decoration" true)
 protocolnew("protocols" "wlr-data-control-unstable-v1" true)
 protocolnew("${HYPRLAND_PROTOCOLS}/protocols" "hyprland-focus-grab-v1" true)
 protocolnew("protocols" "wlr-layer-shell-unstable-v1" true)
-protocolnew("protocols" "xx-color-management-v4" true)
-protocolnew("protocols" "frog-color-management-v1" true)
 protocolnew("protocols" "wayland-drm" true)
 protocolnew("${HYPRLAND_PROTOCOLS}/protocols" "hyprland-ctm-control-v1" true)
 protocolnew("${HYPRLAND_PROTOCOLS}/protocols" "hyprland-surface-v1" true)
@@ -571,6 +575,11 @@ install(
         \"\$ENV{DESTDIR}${CMAKE_INSTALL_FULL_BINDIR}/hyprland\" \
         )")
 # session file
+configure_file(
+    ${CMAKE_SOURCE_DIR}/example/hyprland.desktop.in
+    ${CMAKE_SOURCE_DIR}/example/hyprland.desktop
+    @ONLY
+)
 install(FILES ${CMAKE_SOURCE_DIR}/example/hyprland.desktop
         DESTINATION ${CMAKE_INSTALL_DATAROOTDIR}/wayland-sessions)
 

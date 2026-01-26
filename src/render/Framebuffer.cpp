@@ -9,13 +9,8 @@ bool CFramebuffer::alloc(int w, int h, uint32_t drmFormat) {
     bool firstAlloc = false;
     RASSERT((w > 0 && h > 0), "cannot alloc a FB with negative / zero size! (attempted {}x{})", w, h);
 
-    uint32_t glFormat = NFormatUtils::drmFormatToGL(drmFormat);
-    uint32_t glType   = NFormatUtils::glFormatToType(glFormat);
-
-    if (drmFormat != m_drmFormat || m_size != Vector2D{w, h})
-        release();
-
-    m_drmFormat = drmFormat;
+    const bool sizeChanged   = (m_size != Vector2D(w, h));
+    const bool formatChanged = (drmFormat != m_drmFormat);
 
     if (!m_tex) {
         m_tex = makeShared<CTexture>();
@@ -34,40 +29,51 @@ bool CFramebuffer::alloc(int w, int h, uint32_t drmFormat) {
         firstAlloc    = true;
     }
 
-    if (firstAlloc || m_size != Vector2D(w, h)) {
+    if (firstAlloc || sizeChanged || formatChanged) {
+        const auto format = NFormatUtils::getPixelFormatFromDRM(drmFormat);
         m_tex->bind();
-        glTexImage2D(GL_TEXTURE_2D, 0, glFormat, w, h, 0, GL_RGBA, glType, nullptr);
+        glTexImage2D(GL_TEXTURE_2D, 0, format->glInternalFormat ? format->glInternalFormat : format->glFormat, w, h, 0, format->glFormat, format->glType, nullptr);
         glBindFramebuffer(GL_FRAMEBUFFER, m_fb);
         glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, m_tex->m_texID, 0);
 
         if (m_stencilTex) {
             m_stencilTex->bind();
             glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH24_STENCIL8, w, h, 0, GL_DEPTH_STENCIL, GL_UNSIGNED_INT_24_8, nullptr);
-            glFramebufferTexture2D(GL_FRAMEBUFFER, GL_STENCIL_ATTACHMENT, GL_TEXTURE_2D, m_stencilTex->m_texID, 0);
+            glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT, GL_TEXTURE_2D, m_stencilTex->m_texID, 0);
+
+            glDisable(GL_DEPTH_TEST);
+            glDepthMask(GL_FALSE);
         }
 
         auto status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
         RASSERT((status == GL_FRAMEBUFFER_COMPLETE), "Framebuffer incomplete, couldn't create! (FB status: {}, GL Error: 0x{:x})", status, sc<int>(glGetError()));
 
-        Debug::log(LOG, "Framebuffer created, status {}", status);
+        Log::logger->log(Log::DEBUG, "Framebuffer created, status {}", status);
     }
 
     glBindTexture(GL_TEXTURE_2D, 0);
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
 
-    m_size = Vector2D(w, h);
+    m_drmFormat = drmFormat;
+    m_size      = Vector2D(w, h);
 
     return true;
 }
 
 void CFramebuffer::addStencil(SP<CTexture> tex) {
+    if (m_stencilTex == tex)
+        return;
+
     m_stencilTex = tex;
     m_stencilTex->bind();
     glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH24_STENCIL8, m_size.x, m_size.y, 0, GL_DEPTH_STENCIL, GL_UNSIGNED_INT_24_8, nullptr);
 
     glBindFramebuffer(GL_FRAMEBUFFER, m_fb);
 
-    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_STENCIL_ATTACHMENT, GL_TEXTURE_2D, m_stencilTex->m_texID, 0);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT, GL_TEXTURE_2D, m_stencilTex->m_texID, 0);
+
+    glDisable(GL_DEPTH_TEST);
+    glDepthMask(GL_FALSE);
 
     auto status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
     RASSERT((status == GL_FRAMEBUFFER_COMPLETE), "Failed adding a stencil to fbo!", status);
@@ -124,4 +130,11 @@ GLuint CFramebuffer::getFBID() {
 
 SP<CTexture> CFramebuffer::getStencilTex() {
     return m_stencilTex;
+}
+
+void CFramebuffer::invalidate(const std::vector<GLenum>& attachments) {
+    if (!isAllocated())
+        return;
+
+    glInvalidateFramebuffer(GL_FRAMEBUFFER, attachments.size(), attachments.data());
 }

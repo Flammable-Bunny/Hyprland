@@ -68,7 +68,7 @@ eViewType CPopup::type() const {
 }
 
 bool CPopup::visible() const {
-    if (!m_mapped || !m_wlSurface->resource())
+    if ((!m_mapped || !m_wlSurface->resource()) && (!m_fadingOut || m_alpha->value() > 0.F))
         return false;
 
     if (!m_windowOwner.expired())
@@ -91,7 +91,7 @@ std::optional<CBox> CPopup::surfaceLogicalBox() const {
     if (!visible())
         return std::nullopt;
 
-    return CBox{t1ParentCoords(), size()};
+    return CBox{coordsGlobal(), size()};
 }
 
 bool CPopup::desktopComponent() const {
@@ -129,7 +129,7 @@ void CPopup::initAllSignals() {
     m_listeners.map        = m_resource->m_surface->m_events.map.listen([this] { this->onMap(); });
     m_listeners.unmap      = m_resource->m_surface->m_events.unmap.listen([this] { this->onUnmap(); });
     m_listeners.dismissed  = m_resource->m_events.dismissed.listen([this] { this->onUnmap(); });
-    m_listeners.destroy    = m_resource->m_surface->m_events.destroy.listen([this] { this->onDestroy(); });
+    m_listeners.destroy    = m_resource->m_events.destroy.listen([this] { this->onDestroy(); });
     m_listeners.commit     = m_resource->m_surface->m_events.commit.listen([this] { this->onCommit(); });
     m_listeners.newPopup   = m_resource->m_surface->m_events.newPopup.listen([this](const auto& resource) { this->onNewPopup(resource); });
 }
@@ -137,7 +137,7 @@ void CPopup::initAllSignals() {
 void CPopup::onNewPopup(SP<CXDGPopupResource> popup) {
     const auto& POPUP = m_children.emplace_back(CPopup::create(popup, m_self));
     POPUP->m_self     = POPUP;
-    Debug::log(LOG, "New popup at {:x}", rc<uintptr_t>(this));
+    Log::logger->log(Log::DEBUG, "New popup at {:x}", rc<uintptr_t>(this));
 }
 
 void CPopup::onDestroy() {
@@ -150,8 +150,13 @@ void CPopup::onDestroy() {
     m_children.clear();
     m_wlSurface.reset();
 
+    m_listeners.map.reset();
+    m_listeners.unmap.reset();
+    m_listeners.commit.reset();
+    m_listeners.newPopup.reset();
+
     if (m_fadingOut && m_alpha->isBeingAnimated()) {
-        Debug::log(LOG, "popup {:x}: skipping full destroy, animating", rc<uintptr_t>(this));
+        Log::logger->log(Log::DEBUG, "popup {:x}: skipping full destroy, animating", rc<uintptr_t>(this));
         return;
     }
 
@@ -159,7 +164,7 @@ void CPopup::onDestroy() {
 }
 
 void CPopup::fullyDestroy() {
-    Debug::log(LOG, "popup {:x} fully destroying", rc<uintptr_t>(this));
+    Log::logger->log(Log::DEBUG, "popup {:x} fully destroying", rc<uintptr_t>(this));
 
     g_pHyprRenderer->makeEGLCurrent();
     std::erase_if(g_pHyprOpenGL->m_popupFramebuffers, [&](const auto& other) { return other.first.expired() || other.first == m_self; });
@@ -198,7 +203,7 @@ void CPopup::onMap() {
     m_alpha->setValueAndWarp(0.F);
     *m_alpha = 1.F;
 
-    Debug::log(LOG, "popup {:x}: mapped", rc<uintptr_t>(this));
+    Log::logger->log(Log::DEBUG, "popup {:x}: mapped", rc<uintptr_t>(this));
 }
 
 void CPopup::onUnmap() {
@@ -206,12 +211,12 @@ void CPopup::onUnmap() {
         return;
 
     if (!m_resource || !m_resource->m_surface) {
-        Debug::log(ERR, "CPopup: orphaned (no surface/resource) and unmaps??");
+        Log::logger->log(Log::ERR, "CPopup: orphaned (no surface/resource) and unmaps??");
         onDestroy();
         return;
     }
 
-    Debug::log(LOG, "popup {:x}: unmapped", rc<uintptr_t>(this));
+    Log::logger->log(Log::DEBUG, "popup {:x}: unmapped", rc<uintptr_t>(this));
 
     // if the popup committed a different size right now, we also need to damage the old size.
     const Vector2D MAX_DAMAGE_SIZE = {std::max(m_lastSize.x, m_resource->m_surface->m_surface->m_current.size.x),
@@ -266,7 +271,7 @@ void CPopup::onUnmap() {
 
 void CPopup::onCommit(bool ignoreSiblings) {
     if (!m_resource || !m_resource->m_surface) {
-        Debug::log(ERR, "CPopup: orphaned (no surface/resource) and commits??");
+        Log::logger->log(Log::ERR, "CPopup: orphaned (no surface/resource) and commits??");
         onDestroy();
         return;
     }
@@ -281,7 +286,7 @@ void CPopup::onCommit(bool ignoreSiblings) {
 
         static auto PLOGDAMAGE = CConfigValue<Hyprlang::INT>("debug:log_damage");
         if (*PLOGDAMAGE)
-            Debug::log(LOG, "Refusing to commit damage from a subsurface of {} because it's invisible.", m_windowOwner.lock());
+            Log::logger->log(Log::DEBUG, "Refusing to commit damage from a subsurface of {} because it's invisible.", m_windowOwner.lock());
         return;
     }
 
@@ -313,7 +318,7 @@ void CPopup::onCommit(bool ignoreSiblings) {
 }
 
 void CPopup::onReposition() {
-    Debug::log(LOG, "Popup {:x} requests reposition", rc<uintptr_t>(this));
+    Log::logger->log(Log::DEBUG, "Popup {:x} requests reposition", rc<uintptr_t>(this));
 
     m_requestedReposition = true;
 
@@ -333,14 +338,14 @@ void CPopup::reposition() {
     m_resource->applyPositioning(box, COORDS);
 }
 
-SP<Desktop::View::CWLSurface> CPopup::getT1Owner() {
+SP<Desktop::View::CWLSurface> CPopup::getT1Owner() const {
     if (m_windowOwner)
         return m_windowOwner->wlSurface();
     else
         return m_layerOwner->wlSurface();
 }
 
-Vector2D CPopup::coordsRelativeToParent() {
+Vector2D CPopup::coordsRelativeToParent() const {
     Vector2D offset;
 
     if (!m_resource)
@@ -360,11 +365,11 @@ Vector2D CPopup::coordsRelativeToParent() {
     return offset;
 }
 
-Vector2D CPopup::coordsGlobal() {
+Vector2D CPopup::coordsGlobal() const {
     return localToGlobal(coordsRelativeToParent());
 }
 
-Vector2D CPopup::localToGlobal(const Vector2D& rel) {
+Vector2D CPopup::localToGlobal(const Vector2D& rel) const {
     return t1ParentCoords() + rel;
 }
 
@@ -394,6 +399,8 @@ void CPopup::recheckChildrenRecursive() {
     std::vector<WP<CPopup>> cpy;
     std::ranges::for_each(m_children, [&cpy](const auto& el) { cpy.emplace_back(el); });
     for (auto const& c : cpy) {
+        if (!c->visible())
+            continue;
         c->onCommit(true);
         c->recheckChildrenRecursive();
     }
@@ -476,7 +483,7 @@ bool CPopup::inert() const {
     return m_inert;
 }
 
-PHLMONITOR CPopup::getMonitor() {
+PHLMONITOR CPopup::getMonitor() const {
     if (!m_windowOwner.expired())
         return m_windowOwner->m_monitor.lock();
     if (!m_layerOwner.expired())

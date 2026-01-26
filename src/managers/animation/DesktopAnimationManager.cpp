@@ -1,11 +1,14 @@
 #include "DesktopAnimationManager.hpp"
 
+#include <algorithm>
+
 #include "../../desktop/view/LayerSurface.hpp"
 #include "../../desktop/view/Window.hpp"
 #include "../../desktop/Workspace.hpp"
 
 #include "../../config/ConfigManager.hpp"
 #include "../../Compositor.hpp"
+#include "desktop/DesktopTypes.hpp"
 #include "wlr-layer-shell-unstable-v1.hpp"
 
 void CDesktopAnimationManager::startAnimation(PHLWINDOW pWindow, eAnimationType type, bool force) {
@@ -279,7 +282,7 @@ void CDesktopAnimationManager::startAnimation(PHLWORKSPACE ws, eAnimationType ty
     if (percstr.ends_with('%')) {
         try {
             movePerc = std::stoi(percstr.substr(0, percstr.length() - 1));
-        } catch (std::exception& e) { Debug::log(ERR, "Error in startAnim: invalid percentage"); }
+        } catch (std::exception& e) { Log::logger->log(Log::ERR, "Error in startAnim: invalid percentage"); }
     }
 
     if (ANIMSTYLE.starts_with("slidefade")) {
@@ -406,32 +409,26 @@ void CDesktopAnimationManager::animationSlide(PHLWINDOW pWindow, std::string for
     }
 
     const auto MIDPOINT = GOALPOS + GOALSIZE / 2.f;
+    const auto MONBOX   = PMONITOR->logicalBox();
 
-    // check sides it touches
-    const auto MONITOR_WORKAREA = PMONITOR->logicalBoxMinusReserved();
-    const bool DISPLAYLEFT      = STICKS(pWindow->m_position.x, MONITOR_WORKAREA.x);
-    const bool DISPLAYRIGHT     = STICKS(pWindow->m_position.x + pWindow->m_size.x, MONITOR_WORKAREA.x + MONITOR_WORKAREA.w);
-    const bool DISPLAYTOP       = STICKS(pWindow->m_position.y, MONITOR_WORKAREA.y);
-    const bool DISPLAYBOTTOM    = STICKS(pWindow->m_position.y + pWindow->m_size.y, MONITOR_WORKAREA.y + MONITOR_WORKAREA.h);
+    // find the closest edge to midpoint
+    // CSS style, top right bottom left
+    std::array<float, 4> distances = {
+        MIDPOINT.y - MONBOX.y,            //
+        MONBOX.x + MONBOX.w - MIDPOINT.x, //
+        MONBOX.y + MONBOX.h - MIDPOINT.y, //
+        MIDPOINT.x - MONBOX.x,            //
+    };
 
-    if (DISPLAYBOTTOM && DISPLAYTOP) {
-        if (DISPLAYLEFT && DISPLAYRIGHT) {
-            posOffset = GOALPOS + Vector2D(0.0, GOALSIZE.y);
-        } else if (DISPLAYLEFT) {
-            posOffset = GOALPOS - Vector2D(GOALSIZE.x, 0.0);
-        } else {
-            posOffset = GOALPOS + Vector2D(GOALSIZE.x, 0.0);
-        }
-    } else if (DISPLAYTOP) {
-        posOffset = GOALPOS - Vector2D(0.0, GOALSIZE.y);
-    } else if (DISPLAYBOTTOM) {
-        posOffset = GOALPOS + Vector2D(0.0, GOALSIZE.y);
-    } else {
-        if (MIDPOINT.y > PMONITOR->m_position.y + PMONITOR->m_size.y / 2.f)
-            posOffset = Vector2D(GOALPOS.x, PMONITOR->m_position.y + PMONITOR->m_size.y);
-        else
-            posOffset = Vector2D(GOALPOS.x, PMONITOR->m_position.y - GOALSIZE.y);
-    }
+    const auto MIN_DIST = std::min({distances[0], distances[1], distances[2], distances[3]});
+    if (MIN_DIST == distances[2])
+        posOffset = Vector2D(GOALPOS.x, PMONITOR->m_position.y + PMONITOR->m_size.y);
+    else if (MIN_DIST == distances[3])
+        posOffset = GOALPOS - Vector2D(GOALSIZE.x, 0.0);
+    else if (MIN_DIST == distances[1])
+        posOffset = GOALPOS + Vector2D(GOALSIZE.x, 0.0);
+    else
+        posOffset = Vector2D(GOALPOS.x, PMONITOR->m_position.y - GOALSIZE.y);
 
     if (!close)
         pWindow->m_realPosition->setValue(posOffset);
@@ -482,10 +479,17 @@ void CDesktopAnimationManager::setFullscreenFadeAnimation(PHLWORKSPACE ws, eAnim
 
     if (ws->m_id == PMONITOR->activeWorkspaceID() || ws->m_id == PMONITOR->activeSpecialWorkspaceID()) {
         for (auto const& ls : PMONITOR->m_layerSurfaceLayers[ZWLR_LAYER_SHELL_V1_LAYER_TOP]) {
-            if (!ls->m_fadingOut)
+            if (!ls->m_fadingOut && !ls->m_aboveFullscreen)
                 *ls->m_alpha = FULLSCREEN && ws->m_fullscreenMode == FSMODE_FULLSCREEN ? 0.f : 1.f;
         }
     }
+}
+
+void CDesktopAnimationManager::setFullscreenFloatingFade(PHLWINDOW pWindow, float fade) {
+    if (pWindow->m_fadingOut || !pWindow->m_isFloating)
+        return;
+
+    *pWindow->m_alpha = fade;
 }
 
 void CDesktopAnimationManager::overrideFullscreenFadeAmount(PHLWORKSPACE ws, float fade, PHLWINDOW exclude) {

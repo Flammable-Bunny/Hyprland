@@ -216,9 +216,11 @@ void CInputManager::onTabletProximity(CTablet::SProximityEvent e) {
     PTOOL->m_active = e.in;
 
     if (!e.in) {
+        m_lastInputTablet = false;
         if (PTOOL->getSurface())
             unfocusTool(PTOOL);
     } else {
+        m_lastInputTablet = true;
         simulateMouseMovement();
         refocusTablet(PTAB, PTOOL);
     }
@@ -231,7 +233,7 @@ void CInputManager::newTablet(SP<Aquamarine::ITablet> pDevice) {
     try {
         PNEWTABLET->m_hlName = g_pInputManager->getNameForNewDevice(pDevice->getName());
     } catch (std::exception& e) {
-        Debug::log(ERR, "Tablet had no name???"); // logic error
+        Log::logger->log(Log::ERR, "Tablet had no name???"); // logic error
     }
 
     g_pPointerManager->attachTablet(PNEWTABLET);
@@ -257,7 +259,7 @@ SP<CTabletTool> CInputManager::ensureTabletToolPresent(SP<Aquamarine::ITabletToo
     try {
         PTOOL->m_hlName = g_pInputManager->getNameForNewDevice(pTool->getName());
     } catch (std::exception& e) {
-        Debug::log(ERR, "Tablet had no name???"); // logic error
+        Log::logger->log(Log::ERR, "Tablet had no name???"); // logic error
     }
 
     PTOOL->m_events.destroy.listenStatic([this, tool = PTOOL.get()] {
@@ -275,7 +277,7 @@ void CInputManager::newTabletPad(SP<Aquamarine::ITabletPad> pDevice) {
     try {
         PNEWPAD->m_hlName = g_pInputManager->getNameForNewDevice(pDevice->getName());
     } catch (std::exception& e) {
-        Debug::log(ERR, "Pad had no name???"); // logic error
+        Log::logger->log(Log::ERR, "Pad had no name???"); // logic error
     }
 
     PNEWPAD->m_events.destroy.listenStatic([this, pad = PNEWPAD.get()] {

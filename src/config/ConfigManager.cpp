@@ -90,7 +90,7 @@ static Hyprlang::CParseResult configHandleGradientSet(const char* VALUE, void** 
             try {
                 DATA->m_angle = std::stoi(std::string(var.substr(0, var.find("deg")))) * (PI / 180.0); // radians
             } catch (...) {
-                Debug::log(WARN, "Error parsing gradient {}", V);
+                Log::logger->log(Log::WARN, "Error parsing gradient {}", V);
                 parseError = "Error parsing gradient " + V;
             }
 
@@ -98,7 +98,7 @@ static Hyprlang::CParseResult configHandleGradientSet(const char* VALUE, void** 
         }
 
         if (DATA->m_colors.size() >= 10) {
-            Debug::log(WARN, "Error parsing gradient {}: max colors is 10.", V);
+            Log::logger->log(Log::WARN, "Error parsing gradient {}: max colors is 10.", V);
             parseError = "Error parsing gradient " + V + ": max colors is 10.";
             break;
         }
@@ -109,13 +109,13 @@ static Hyprlang::CParseResult configHandleGradientSet(const char* VALUE, void** 
                 throw std::runtime_error(std::format("failed to parse {} as a color", var));
             DATA->m_colors.emplace_back(COL.value());
         } catch (std::exception& e) {
-            Debug::log(WARN, "Error parsing gradient {}", V);
+            Log::logger->log(Log::WARN, "Error parsing gradient {}", V);
             parseError = "Error parsing gradient " + V + ": " + e.what();
         }
     }
 
     if (DATA->m_colors.empty()) {
-        Debug::log(WARN, "Error parsing gradient {}", V);
+        Log::logger->log(Log::WARN, "Error parsing gradient {}", V);
         if (parseError.empty())
             parseError = "Error parsing gradient " + V + ": No colors?";
 
@@ -399,6 +399,12 @@ static Hyprlang::CParseResult handleWindowrule(const char* c, const char* v) {
     return result;
 }
 
+static Hyprlang::CParseResult handleWindowrulev2(const char* c, const char* v) {
+    Hyprlang::CParseResult res;
+    res.setError("windowrulev2 is deprecated. Correct syntax can be found on the wiki.");
+    return res;
+}
+
 static Hyprlang::CParseResult handleLayerrule(const char* c, const char* v) {
     const std::string      VALUE   = v;
     const std::string      COMMAND = c;
@@ -409,6 +415,12 @@ static Hyprlang::CParseResult handleLayerrule(const char* c, const char* v) {
     if (RESULT.has_value())
         result.setError(RESULT.value().c_str());
     return result;
+}
+
+static Hyprlang::CParseResult handleLayerrulev2(const char* c, const char* v) {
+    Hyprlang::CParseResult res;
+    res.setError("layerrulev2 doesn't exist. Correct syntax can be found on the wiki.");
+    return res;
 }
 
 void CConfigManager::registerConfigVar(const char* name, const Hyprlang::INT& val) {
@@ -541,6 +553,7 @@ CConfigManager::CConfigManager() {
     registerConfigVar("group:groupbar:gaps_in", Hyprlang::INT{2});
     registerConfigVar("group:groupbar:keep_upper_gap", Hyprlang::INT{1});
     registerConfigVar("group:groupbar:text_offset", Hyprlang::INT{0});
+    registerConfigVar("group:groupbar:text_padding", Hyprlang::INT{0});
     registerConfigVar("group:groupbar:blur", Hyprlang::INT{0});
 
     registerConfigVar("debug:log_damage", Hyprlang::INT{0});
@@ -559,6 +572,10 @@ CConfigManager::CConfigManager() {
     registerConfigVar("debug:disable_scale_checks", Hyprlang::INT{0});
     registerConfigVar("debug:colored_stdout_logs", Hyprlang::INT{1});
     registerConfigVar("debug:full_cm_proto", Hyprlang::INT{0});
+    registerConfigVar("debug:ds_handle_same_buffer", Hyprlang::INT{1});
+    registerConfigVar("debug:ds_handle_same_buffer_fifo", Hyprlang::INT{1});
+    registerConfigVar("debug:fifo_pending_workaround", Hyprlang::INT{1});
+    registerConfigVar("debug:render_solitary_wo_damage", Hyprlang::INT{0});
 
     registerConfigVar("decoration:rounding", Hyprlang::INT{0});
     registerConfigVar("decoration:rounding_power", {2.F});
@@ -735,10 +752,12 @@ CConfigManager::CConfigManager() {
     registerConfigVar("cursor:zoom_factor", {1.f});
     registerConfigVar("cursor:zoom_rigid", Hyprlang::INT{0});
     registerConfigVar("cursor:zoom_disable_aa", Hyprlang::INT{0});
+    registerConfigVar("cursor:zoom_detached_camera", Hyprlang::INT{1});
     registerConfigVar("cursor:enable_hyprcursor", Hyprlang::INT{1});
     registerConfigVar("cursor:sync_gsettings_theme", Hyprlang::INT{1});
     registerConfigVar("cursor:hide_on_key_press", Hyprlang::INT{0});
     registerConfigVar("cursor:hide_on_touch", Hyprlang::INT{1});
+    registerConfigVar("cursor:hide_on_tablet", Hyprlang::INT{0});
     registerConfigVar("cursor:use_cpu_buffer", Hyprlang::INT{2});
     registerConfigVar("cursor:warp_back_after_non_mouse_input", Hyprlang::INT{0});
 
@@ -769,8 +788,6 @@ CConfigManager::CConfigManager() {
     registerConfigVar("ecosystem:no_update_news", Hyprlang::INT{0});
     registerConfigVar("ecosystem:no_donation_nag", Hyprlang::INT{0});
     registerConfigVar("ecosystem:enforce_permissions", Hyprlang::INT{0});
-
-    registerConfigVar("experimental:xx_color_management_v4", Hyprlang::INT{0});
 
     registerConfigVar("quirks:prefer_hdr", Hyprlang::INT{0});
 
@@ -869,8 +886,12 @@ CConfigManager::CConfigManager() {
     m_config->registerHandler(&::handleSubmap, "submap", {false});
     m_config->registerHandler(&::handlePlugin, "plugin", {false});
     m_config->registerHandler(&::handlePermission, "permission", {false});
-    m_config->registerHandler(&::handleGesture, "gesture", {false});
+    m_config->registerHandler(&::handleGesture, "gesture", {true});
     m_config->registerHandler(&::handleEnv, "env", {true});
+
+    // windowrulev2 and layerrulev2 errors
+    m_config->registerHandler(&::handleWindowrulev2, "windowrulev2", {false});
+    m_config->registerHandler(&::handleLayerrulev2, "layerrulev2", {false});
 
     // pluginza
     m_config->addSpecialCategory("plugin", {nullptr, true});
@@ -880,7 +901,8 @@ CConfigManager::CConfigManager() {
     resetHLConfig();
 
     if (CONFIG_OPTIONS.size() != m_configValueNumber - 1 /* autogenerated is special */)
-        Debug::log(LOG, "Warning: config descriptions have {} entries, but there are {} config values. This should fail tests!!", CONFIG_OPTIONS.size(), m_configValueNumber);
+        Log::logger->log(Log::DEBUG, "Warning: config descriptions have {} entries, but there are {} config values. This should fail tests!!", CONFIG_OPTIONS.size(),
+                         m_configValueNumber);
 
     if (!g_pCompositor->m_onlyConfigVerification) {
         const auto disableLogs = std::any_cast<Hyprlang::INT>(m_config->getConfigValue("debug:disable_logs"));
@@ -891,9 +913,6 @@ CConfigManager::CConfigManager() {
                 "https://wiki.hypr.land/Configuring/Variables/#debug");
         }
     }
-
-    Debug::m_disableLogs = rc<int64_t* const*>(m_config->getConfigValuePtr("debug:disable_logs")->getDataStaticPtr());
-    Debug::m_disableTime = rc<int64_t* const*>(m_config->getConfigValuePtr("debug:disable_time")->getDataStaticPtr());
 
     if (g_pEventLoopManager && ERR.has_value())
         g_pEventLoopManager->doLater([ERR] { g_pHyprError->queueCreate(ERR.value(), CHyprColor{1.0, 0.1, 0.1, 1.0}); });
@@ -926,14 +945,14 @@ std::optional<std::string> CConfigManager::generateConfig(std::string configPath
         std::error_code ec;
         bool            created = std::filesystem::create_directories(parentPath, ec);
         if (ec) {
-            Debug::log(ERR, "Couldn't create config home directory ({}): {}", ec.message(), parentPath);
+            Log::logger->log(Log::ERR, "Couldn't create config home directory ({}): {}", ec.message(), parentPath);
             return "Config could not be generated.";
         }
         if (created)
-            Debug::log(WARN, "Creating config home directory");
+            Log::logger->log(Log::WARN, "Creating config home directory");
     }
 
-    Debug::log(WARN, "No config file found; attempting to generate.");
+    Log::logger->log(Log::WARN, "No config file found; attempting to generate.");
     std::ofstream ofs;
     ofs.open(configPath, std::ios::trunc);
     if (!safeMode) {
@@ -1005,7 +1024,7 @@ std::string CConfigManager::getConfigString() {
         std::ifstream configFile(path);
         configString += ("\n\nConfig File: " + path + ": ");
         if (!configFile.is_open()) {
-            Debug::log(LOG, "Config file not readable/found!");
+            Log::logger->log(Log::DEBUG, "Config file not readable/found!");
             configString += "Read Failed\n";
             continue;
         }
@@ -1132,7 +1151,7 @@ std::optional<std::string> CConfigManager::resetHLConfig() {
     // paths
     m_configPaths.clear();
     std::string mainConfigPath = getMainConfigPath();
-    Debug::log(LOG, "Using config: {}", mainConfigPath);
+    Log::logger->log(Log::DEBUG, "Using config: {}", mainConfigPath);
     m_configPaths.emplace_back(mainConfigPath);
 
     const auto RET = verifyConfigExists();
@@ -1400,11 +1419,9 @@ void CConfigManager::postConfigReload(const Hyprlang::CParseResult& result) {
         g_pHyprRenderer->initiateManualCrash();
     }
 
-    Debug::m_disableStdout = !std::any_cast<Hyprlang::INT>(m_config->getConfigValue("debug:enable_stdout_logs"));
-    if (Debug::m_disableStdout && m_isFirstLaunch)
-        Debug::log(LOG, "Disabling stdout logs! Check the log for further logs.");
-
-    Debug::m_coloredLogs = rc<int64_t* const*>(m_config->getConfigValuePtr("debug:colored_stdout_logs")->getDataStaticPtr());
+    auto disableStdout = !std::any_cast<Hyprlang::INT>(m_config->getConfigValue("debug:enable_stdout_logs"));
+    if (disableStdout && m_isFirstLaunch)
+        Log::logger->log(Log::DEBUG, "Disabling stdout logs! Check the log for further logs.");
 
     for (auto const& m : g_pCompositor->m_monitors) {
         // mark blur dirty
@@ -1438,7 +1455,7 @@ void CConfigManager::postConfigReload(const Hyprlang::CParseResult& result) {
 void CConfigManager::init() {
 
     g_pConfigWatcher->setOnChange([this](const CConfigWatcher::SConfigWatchEvent& e) {
-        Debug::log(LOG, "CConfigManager: file {} modified, reloading", e.file);
+        Log::logger->log(Log::DEBUG, "CConfigManager: file {} modified, reloading", e.file);
         reload();
     });
 
@@ -1519,35 +1536,35 @@ SMonitorRule CConfigManager::getMonitorRuleFor(const PHLMONITOR PMONITOR) {
         if (!CONFIG)
             return rule;
 
-        Debug::log(LOG, "CConfigManager::getMonitorRuleFor: found a wlr_output_manager override for {}", PMONITOR->m_name);
+        Log::logger->log(Log::DEBUG, "CConfigManager::getMonitorRuleFor: found a wlr_output_manager override for {}", PMONITOR->m_name);
 
-        Debug::log(LOG, " > overriding enabled: {} -> {}", !rule.disabled, !CONFIG->enabled);
+        Log::logger->log(Log::DEBUG, " > overriding enabled: {} -> {}", !rule.disabled, !CONFIG->enabled);
         rule.disabled = !CONFIG->enabled;
 
         if ((CONFIG->committedProperties & OUTPUT_HEAD_COMMITTED_MODE) || (CONFIG->committedProperties & OUTPUT_HEAD_COMMITTED_CUSTOM_MODE)) {
-            Debug::log(LOG, " > overriding mode: {:.0f}x{:.0f}@{:.2f}Hz -> {:.0f}x{:.0f}@{:.2f}Hz", rule.resolution.x, rule.resolution.y, rule.refreshRate, CONFIG->resolution.x,
-                       CONFIG->resolution.y, CONFIG->refresh / 1000.F);
+            Log::logger->log(Log::DEBUG, " > overriding mode: {:.0f}x{:.0f}@{:.2f}Hz -> {:.0f}x{:.0f}@{:.2f}Hz", rule.resolution.x, rule.resolution.y, rule.refreshRate,
+                             CONFIG->resolution.x, CONFIG->resolution.y, CONFIG->refresh / 1000.F);
             rule.resolution  = CONFIG->resolution;
             rule.refreshRate = CONFIG->refresh / 1000.F;
         }
 
         if (CONFIG->committedProperties & OUTPUT_HEAD_COMMITTED_POSITION) {
-            Debug::log(LOG, " > overriding offset: {:.0f}, {:.0f} -> {:.0f}, {:.0f}", rule.offset.x, rule.offset.y, CONFIG->position.x, CONFIG->position.y);
+            Log::logger->log(Log::DEBUG, " > overriding offset: {:.0f}, {:.0f} -> {:.0f}, {:.0f}", rule.offset.x, rule.offset.y, CONFIG->position.x, CONFIG->position.y);
             rule.offset = CONFIG->position;
         }
 
         if (CONFIG->committedProperties & OUTPUT_HEAD_COMMITTED_TRANSFORM) {
-            Debug::log(LOG, " > overriding transform: {} -> {}", sc<uint8_t>(rule.transform), sc<uint8_t>(CONFIG->transform));
+            Log::logger->log(Log::DEBUG, " > overriding transform: {} -> {}", sc<uint8_t>(rule.transform), sc<uint8_t>(CONFIG->transform));
             rule.transform = CONFIG->transform;
         }
 
         if (CONFIG->committedProperties & OUTPUT_HEAD_COMMITTED_SCALE) {
-            Debug::log(LOG, " > overriding scale: {} -> {}", sc<uint8_t>(rule.scale), sc<uint8_t>(CONFIG->scale));
+            Log::logger->log(Log::DEBUG, " > overriding scale: {} -> {}", sc<uint8_t>(rule.scale), sc<uint8_t>(CONFIG->scale));
             rule.scale = CONFIG->scale;
         }
 
         if (CONFIG->committedProperties & OUTPUT_HEAD_COMMITTED_ADAPTIVE_SYNC) {
-            Debug::log(LOG, " > overriding vrr: {} -> {}", rule.vrr.value_or(0), CONFIG->adaptiveSync);
+            Log::logger->log(Log::DEBUG, " > overriding vrr: {} -> {}", rule.vrr.value_or(0), CONFIG->adaptiveSync);
             rule.vrr = sc<int>(CONFIG->adaptiveSync);
         }
 
@@ -1560,7 +1577,7 @@ SMonitorRule CConfigManager::getMonitorRuleFor(const PHLMONITOR PMONITOR) {
         }
     }
 
-    Debug::log(WARN, "No rule found for {}, trying to use the first.", PMONITOR->m_name);
+    Log::logger->log(Log::WARN, "No rule found for {}, trying to use the first.", PMONITOR->m_name);
 
     for (auto const& r : m_monitorRules) {
         if (r.name.empty()) {
@@ -1568,7 +1585,7 @@ SMonitorRule CConfigManager::getMonitorRuleFor(const PHLMONITOR PMONITOR) {
         }
     }
 
-    Debug::log(WARN, "No rules configured. Using the default hardcoded one.");
+    Log::logger->log(Log::WARN, "No rules configured. Using the default hardcoded one.");
 
     return applyWlrOutputConfig(SMonitorRule{.autoDir    = eAutoDirs::DIR_AUTO_RIGHT,
                                              .name       = "",
@@ -1770,7 +1787,7 @@ void CConfigManager::ensureVRR(PHLMONITOR pMonitor) {
                 m->m_output->state->setAdaptiveSync(false);
 
                 if (!m->m_state.commit())
-                    Debug::log(ERR, "Couldn't commit output {} in ensureVRR -> false", m->m_output->name);
+                    Log::logger->log(Log::ERR, "Couldn't commit output {} in ensureVRR -> false", m->m_output->name);
             }
             m->m_vrrActive = false;
             return;
@@ -1780,12 +1797,12 @@ void CConfigManager::ensureVRR(PHLMONITOR pMonitor) {
                 m->m_output->state->setAdaptiveSync(true);
 
                 if (!m->m_state.test()) {
-                    Debug::log(LOG, "Pending output {} does not accept VRR.", m->m_output->name);
+                    Log::logger->log(Log::DEBUG, "Pending output {} does not accept VRR.", m->m_output->name);
                     m->m_output->state->setAdaptiveSync(false);
                 }
 
                 if (!m->m_state.commit())
-                    Debug::log(ERR, "Couldn't commit output {} in ensureVRR -> true", m->m_output->name);
+                    Log::logger->log(Log::ERR, "Couldn't commit output {} in ensureVRR -> true", m->m_output->name);
             }
             m->m_vrrActive = true;
             return;
@@ -1812,7 +1829,7 @@ void CConfigManager::ensureVRR(PHLMONITOR pMonitor) {
                     m->m_output->state->setAdaptiveSync(true);
 
                     if (!m->m_state.test()) {
-                        Debug::log(LOG, "Pending output {} does not accept VRR.", m->m_output->name);
+                        Log::logger->log(Log::DEBUG, "Pending output {} does not accept VRR.", m->m_output->name);
                         m->m_output->state->setAdaptiveSync(false);
                     }
                 }
@@ -1984,7 +2001,7 @@ static bool parseModeLine(const std::string& modeline, drmModeModeInfo& mode) {
         return false;
 
     if (args.size() < 10) {
-        Debug::log(ERR, "modeline parse error: expected at least 9 arguments, got {}", args.size() - 1);
+        Log::logger->log(Log::ERR, "modeline parse error: expected at least 9 arguments, got {}", args.size() - 1);
         return false;
     }
 
@@ -2003,7 +2020,7 @@ static bool parseModeLine(const std::string& modeline, drmModeModeInfo& mode) {
         mode.vtotal      = std::stoi(args[argno++]);
         mode.vrefresh    = mode.clock * 1000.0 * 1000.0 / mode.htotal / mode.vtotal;
     } catch (const std::exception& e) {
-        Debug::log(ERR, "modeline parse error: invalid numeric value: {}", e.what());
+        Log::logger->log(Log::ERR, "modeline parse error: invalid numeric value: {}", e.what());
         return false;
     }
 
@@ -2026,7 +2043,7 @@ static bool parseModeLine(const std::string& modeline, drmModeModeInfo& mode) {
         if (it != flagsmap.end())
             mode.flags |= it->second;
         else
-            Debug::log(ERR, "Invalid flag {} in modeline", key);
+            Log::logger->log(Log::ERR, "Invalid flag {} in modeline", key);
     }
 
     snprintf(mode.name, sizeof(mode.name), "%dx%d@%d", mode.hdisplay, mode.vdisplay, mode.vrefresh / 1000);
@@ -2108,11 +2125,11 @@ bool CMonitorRuleParser::parsePosition(const std::string& value, bool isFirst) {
         else if (value == "auto-center-down")
             m_rule.autoDir = eAutoDirs::DIR_AUTO_CENTER_DOWN;
         else {
-            Debug::log(WARN,
-                       "Invalid auto direction. Valid options are 'auto',"
-                       "'auto-up', 'auto-down', 'auto-left', 'auto-right',"
-                       "'auto-center-up', 'auto-center-down',"
-                       "'auto-center-left', and 'auto-center-right'.");
+            Log::logger->log(Log::WARN,
+                             "Invalid auto direction. Valid options are 'auto',"
+                             "'auto-up', 'auto-down', 'auto-left', 'auto-right',"
+                             "'auto-center-up', 'auto-center-down',"
+                             "'auto-center-left', and 'auto-center-right'.");
             m_error += "invalid auto direction ";
             return false;
         }
@@ -2163,7 +2180,7 @@ bool CMonitorRuleParser::parseTransform(const std::string& value) {
 
     const auto TSF = std::stoi(value);
     if (std::clamp(TSF, 0, 7) != TSF) {
-        Debug::log(ERR, "Invalid transform {} in monitor", TSF);
+        Log::logger->log(Log::ERR, "Invalid transform {} in monitor", TSF);
         m_error += "invalid transform ";
         return false;
     }
@@ -2271,7 +2288,7 @@ std::optional<std::string> CConfigManager::handleMonitor(const std::string& comm
 
             // fall
         } else {
-            Debug::log(ERR, "ConfigManager parseMonitor, curitem bogus???");
+            Log::logger->log(Log::ERR, "ConfigManager parseMonitor, curitem bogus???");
             return "parse error: curitem bogus";
         }
 
@@ -2322,7 +2339,7 @@ std::optional<std::string> CConfigManager::handleMonitor(const std::string& comm
             m_workspaceRules.emplace_back(wsRule);
             argno++;
         } else {
-            Debug::log(ERR, "Config error: invalid monitor syntax at \"{}\"", ARGS[argno]);
+            Log::logger->log(Log::ERR, "Config error: invalid monitor syntax at \"{}\"", ARGS[argno]);
             return "invalid syntax at \"" + std::string(ARGS[argno]) + "\"";
         }
 
@@ -2539,12 +2556,12 @@ std::optional<std::string> CConfigManager::handleBind(const std::string& command
     const auto DISPATCHER = g_pKeybindManager->m_dispatchers.find(HANDLER);
 
     if (DISPATCHER == g_pKeybindManager->m_dispatchers.end()) {
-        Debug::log(ERR, "Invalid dispatcher: {}", HANDLER);
+        Log::logger->log(Log::ERR, "Invalid dispatcher: {}", HANDLER);
         return "Invalid dispatcher, requested \"" + HANDLER + "\" does not exist";
     }
 
     if (MOD == 0 && !MODSTR.empty()) {
-        Debug::log(ERR, "Invalid mod: {}", MODSTR);
+        Log::logger->log(Log::ERR, "Invalid mod: {}", MODSTR);
         return "Invalid mod, requested mod \"" + MODSTR + "\" is not a valid mod.";
     }
 
@@ -2552,7 +2569,7 @@ std::optional<std::string> CConfigManager::handleBind(const std::string& command
         SParsedKey parsedKey = parseKey(KEY);
 
         if (parsedKey.catchAll && m_currentSubmap.name.empty()) {
-            Debug::log(ERR, "Catchall not allowed outside of submap!");
+            Log::logger->log(Log::ERR, "Catchall not allowed outside of submap!");
             return "Invalid catchall, catchall keybinds are only allowed in submaps.";
         }
 
@@ -2602,7 +2619,7 @@ std::optional<std::string> CConfigManager::handleWorkspaceRules(const std::strin
     //     auto       wsIdent         = removeBeginEndSpacesTabs(value.substr(FIRST_DELIM + 1, (WORKSPACE_DELIM - FIRST_DELIM - 1)));
     //     id                         = getWorkspaceIDFromString(wsIdent, name);
     //     if (id == WORKSPACE_INVALID) {
-    //         Debug::log(ERR, "Invalid workspace identifier found: {}", wsIdent);
+    //         Log::logger->log(Log::ERR, "Invalid workspace identifier found: {}", wsIdent);
     //         return "Invalid workspace identifier found: " + wsIdent;
     //     }
     //     wsRule.monitor         = first_ident;
@@ -2668,7 +2685,7 @@ std::optional<std::string> CConfigManager::handleWorkspaceRules(const std::strin
             std::string opt = rule.substr(delim + 10);
             if (!opt.contains(":")) {
                 // invalid
-                Debug::log(ERR, "Invalid workspace rule found: {}", rule);
+                Log::logger->log(Log::ERR, "Invalid workspace rule found: {}", rule);
                 return "Invalid workspace rule found: " + rule;
             }
 
@@ -2712,7 +2729,7 @@ std::optional<std::string> CConfigManager::handleSubmap(const std::string&, cons
 
 std::optional<std::string> CConfigManager::handleSource(const std::string& command, const std::string& rawpath) {
     if (rawpath.length() < 2) {
-        Debug::log(ERR, "source= path garbage");
+        Log::logger->log(Log::ERR, "source= path garbage");
         return "source= path " + rawpath + " bogus!";
     }
 
@@ -2726,7 +2743,7 @@ std::optional<std::string> CConfigManager::handleSource(const std::string& comma
 
     if (auto r = glob(absolutePath(rawpath, m_configCurrentPath).c_str(), GLOB_TILDE, nullptr, glob_buf.get()); r != 0) {
         std::string err = std::format("source= globbing error: {}", r == GLOB_NOMATCH ? "found no match" : GLOB_ABORTED ? "read error" : "out of memory");
-        Debug::log(ERR, "{}", err);
+        Log::logger->log(Log::ERR, "{}", err);
         return err;
     }
 
@@ -2739,7 +2756,7 @@ std::optional<std::string> CConfigManager::handleSource(const std::string& comma
         auto            file_status = std::filesystem::status(value, ec);
 
         if (ec) {
-            Debug::log(ERR, "source= file from glob result is inaccessible ({}): {}", ec.message(), value);
+            Log::logger->log(Log::ERR, "source= file from glob result is inaccessible ({}): {}", ec.message(), value);
             return "source= file " + value + " is inaccessible!";
         }
 
@@ -2752,10 +2769,10 @@ std::optional<std::string> CConfigManager::handleSource(const std::string& comma
             if (THISRESULT.error && errorsFromParsing.empty())
                 errorsFromParsing += THISRESULT.getError();
         } else if (std::filesystem::is_directory(file_status)) {
-            Debug::log(WARN, "source= skipping directory {}", value);
+            Log::logger->log(Log::WARN, "source= skipping directory {}", value);
             continue;
         } else {
-            Debug::log(WARN, "source= skipping non-regular-file {}", value);
+            Log::logger->log(Log::WARN, "source= skipping non-regular-file {}", value);
             continue;
         }
     }
@@ -2829,7 +2846,7 @@ std::optional<std::string> CConfigManager::handlePermission(const std::string& c
     if (mode == PERMISSION_RULE_ALLOW_MODE_UNKNOWN)
         return "unknown permission allow mode";
 
-    if (m_isFirstLaunch)
+    if (m_isFirstLaunch && g_pDynamicPermissionManager)
         g_pDynamicPermissionManager->addConfigPermissionRule(std::string(data[0]), type, mode);
 
     return {};
@@ -2853,9 +2870,17 @@ std::optional<std::string> CConfigManager::handleGesture(const std::string& comm
     if (direction == TRACKPAD_GESTURE_DIR_NONE)
         return std::format("Invalid direction: {}", data[1]);
 
-    int      startDataIdx = 2;
-    uint32_t modMask      = 0;
-    float    deltaScale   = 1.F;
+    int      startDataIdx   = 2;
+    uint32_t modMask        = 0;
+    float    deltaScale     = 1.F;
+    bool     disableInhibit = false;
+
+    for (const auto arg : command.substr(7)) {
+        switch (arg) {
+            case 'p': disableInhibit = true; break;
+            default: return "gesture: invalid flag";
+        }
+    }
 
     while (true) {
 
@@ -2878,23 +2903,26 @@ std::optional<std::string> CConfigManager::handleGesture(const std::string& comm
 
     if (data[startDataIdx] == "dispatcher")
         result = g_pTrackpadGestures->addGesture(makeUnique<CDispatcherTrackpadGesture>(std::string{data[startDataIdx + 1]}, data.join(",", startDataIdx + 2)), fingerCount,
-                                                 direction, modMask, deltaScale);
+                                                 direction, modMask, deltaScale, disableInhibit);
     else if (data[startDataIdx] == "workspace")
-        result = g_pTrackpadGestures->addGesture(makeUnique<CWorkspaceSwipeGesture>(), fingerCount, direction, modMask, deltaScale);
+        result = g_pTrackpadGestures->addGesture(makeUnique<CWorkspaceSwipeGesture>(), fingerCount, direction, modMask, deltaScale, disableInhibit);
     else if (data[startDataIdx] == "resize")
-        result = g_pTrackpadGestures->addGesture(makeUnique<CResizeTrackpadGesture>(), fingerCount, direction, modMask, deltaScale);
+        result = g_pTrackpadGestures->addGesture(makeUnique<CResizeTrackpadGesture>(), fingerCount, direction, modMask, deltaScale, disableInhibit);
     else if (data[startDataIdx] == "move")
-        result = g_pTrackpadGestures->addGesture(makeUnique<CMoveTrackpadGesture>(), fingerCount, direction, modMask, deltaScale);
+        result = g_pTrackpadGestures->addGesture(makeUnique<CMoveTrackpadGesture>(), fingerCount, direction, modMask, deltaScale, disableInhibit);
     else if (data[startDataIdx] == "special")
-        result = g_pTrackpadGestures->addGesture(makeUnique<CSpecialWorkspaceGesture>(std::string{data[startDataIdx + 1]}), fingerCount, direction, modMask, deltaScale);
+        result =
+            g_pTrackpadGestures->addGesture(makeUnique<CSpecialWorkspaceGesture>(std::string{data[startDataIdx + 1]}), fingerCount, direction, modMask, deltaScale, disableInhibit);
     else if (data[startDataIdx] == "close")
-        result = g_pTrackpadGestures->addGesture(makeUnique<CCloseTrackpadGesture>(), fingerCount, direction, modMask, deltaScale);
+        result = g_pTrackpadGestures->addGesture(makeUnique<CCloseTrackpadGesture>(), fingerCount, direction, modMask, deltaScale, disableInhibit);
     else if (data[startDataIdx] == "float")
-        result = g_pTrackpadGestures->addGesture(makeUnique<CFloatTrackpadGesture>(std::string{data[startDataIdx + 1]}), fingerCount, direction, modMask, deltaScale);
+        result =
+            g_pTrackpadGestures->addGesture(makeUnique<CFloatTrackpadGesture>(std::string{data[startDataIdx + 1]}), fingerCount, direction, modMask, deltaScale, disableInhibit);
     else if (data[startDataIdx] == "fullscreen")
-        result = g_pTrackpadGestures->addGesture(makeUnique<CFullscreenTrackpadGesture>(std::string{data[startDataIdx + 1]}), fingerCount, direction, modMask, deltaScale);
+        result = g_pTrackpadGestures->addGesture(makeUnique<CFullscreenTrackpadGesture>(std::string{data[startDataIdx + 1]}), fingerCount, direction, modMask, deltaScale,
+                                                 disableInhibit);
     else if (data[startDataIdx] == "unset")
-        result = g_pTrackpadGestures->removeGesture(fingerCount, direction, modMask, deltaScale);
+        result = g_pTrackpadGestures->removeGesture(fingerCount, direction, modMask, deltaScale, disableInhibit);
     else
         return std::format("Invalid gesture: {}", data[startDataIdx]);
 
@@ -3010,7 +3038,7 @@ std::string SConfigOptionDescription::jsonify() const {
             [this](auto&& val) {
                 const auto PTR = g_pConfigManager->m_config->getConfigValuePtr(value.c_str());
                 if (!PTR) {
-                    Debug::log(ERR, "invalid SConfigOptionDescription: no config option {} exists", value);
+                    Log::logger->log(Log::ERR, "invalid SConfigOptionDescription: no config option {} exists", value);
                     return std::string{""};
                 }
                 const char* const EXPLICIT = PTR->m_bSetByUser ? "true" : "false";
@@ -3087,7 +3115,7 @@ std::string SConfigOptionDescription::jsonify() const {
                                            val.gradient, currentValue, EXPLICIT);
                     }
 
-                } catch (std::bad_any_cast& e) { Debug::log(ERR, "Bad any_cast on value {} in descriptions", value); }
+                } catch (std::bad_any_cast& e) { Log::logger->log(Log::ERR, "Bad any_cast on value {} in descriptions", value); }
                 return std::string{""};
             },
             data);
@@ -3112,7 +3140,7 @@ void CConfigManager::ensurePersistentWorkspacesPresent() {
 }
 
 void CConfigManager::storeFloatingSize(PHLWINDOW window, const Vector2D& size) {
-    Debug::log(LOG, "storing floating size {}x{} for window {}::{}", size.x, size.y, window->m_initialClass, window->m_initialTitle);
+    Log::logger->log(Log::DEBUG, "storing floating size {}x{} for window {}::{}", size.x, size.y, window->m_initialClass, window->m_initialTitle);
     // true -> use m_initialClass and m_initialTitle
     SFloatCache id{window, true};
     m_mStoredFloatingSizes[id] = size;
@@ -3123,9 +3151,9 @@ std::optional<Vector2D> CConfigManager::getStoredFloatingSize(PHLWINDOW window) 
     // and m_class and m_title are just "initial" ones.
     // false -> use m_class and m_title
     SFloatCache id{window, false};
-    Debug::log(LOG, "Hash for window {}::{} = {}", window->m_class, window->m_title, id.hash);
+    Log::logger->log(Log::DEBUG, "Hash for window {}::{} = {}", window->m_class, window->m_title, id.hash);
     if (m_mStoredFloatingSizes.contains(id)) {
-        Debug::log(LOG, "got stored size {}x{} for window {}::{}", m_mStoredFloatingSizes[id].x, m_mStoredFloatingSizes[id].y, window->m_class, window->m_title);
+        Log::logger->log(Log::DEBUG, "got stored size {}x{} for window {}::{}", m_mStoredFloatingSizes[id].x, m_mStoredFloatingSizes[id].y, window->m_class, window->m_title);
         return m_mStoredFloatingSizes[id];
     }
     return std::nullopt;

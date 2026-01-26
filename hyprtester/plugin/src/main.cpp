@@ -213,12 +213,34 @@ static SDispatchResult scroll(std::string in) {
         by = std::stod(in);
     } catch (...) { return SDispatchResult{.success = false, .error = "invalid input"}; }
 
-    Debug::log(LOG, "tester: scrolling by {}", by);
+    Log::logger->log(Log::DEBUG, "tester: scrolling by {}", by);
 
     g_mouse->m_pointerEvents.axis.emit(IPointer::SAxisEvent{
         .delta         = by,
         .deltaDiscrete = 120,
         .mouse         = true,
+    });
+
+    return {};
+}
+
+static SDispatchResult click(std::string in) {
+    CVarList2 data(std::move(in));
+
+    uint32_t  button;
+    bool      pressed;
+    try {
+        button  = std::stoul(std::string{data[0]});
+        pressed = std::stoul(std::string{data[1]}) == 1;
+    } catch (...) { return {.success = false, .error = "invalid input"}; }
+
+    Log::logger->log(Log::DEBUG, "tester: mouse button {} state {}", button, pressed);
+
+    g_mouse->m_pointerEvents.button.emit(IPointer::SButtonEvent{
+        .timeMs = sc<uint32_t>(Time::millis(Time::steadyNow())),
+        .button = button,
+        .state  = pressed ? WL_POINTER_BUTTON_STATE_PRESSED : WL_POINTER_BUTTON_STATE_RELEASED,
+        .mouse  = true,
     });
 
     return {};
@@ -274,6 +296,24 @@ static SDispatchResult checkRule(std::string in) {
     return {};
 }
 
+static SDispatchResult floatingFocusOnFullscreen(std::string in) {
+    const auto PLASTWINDOW = Desktop::focusState()->window();
+
+    if (!PLASTWINDOW)
+        return {.success = false, .error = "No window"};
+
+    if (!PLASTWINDOW->m_isFloating)
+        return {.success = false, .error = "Window must be floating"};
+
+    if (PLASTWINDOW->m_alpha != 1.f)
+        return {.success = false, .error = "floating window doesnt restore it opacity when focused on fullscreen workspace"};
+
+    if (!PLASTWINDOW->m_createdOverFullscreen)
+        return {.success = false, .error = "floating window doesnt get flagged as createdOverFullscreen"};
+
+    return {};
+}
+
 APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
     PHANDLE = handle;
 
@@ -283,9 +323,11 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
     HyprlandAPI::addDispatcherV2(PHANDLE, "plugin:test:alt", ::pressAlt);
     HyprlandAPI::addDispatcherV2(PHANDLE, "plugin:test:gesture", ::simulateGesture);
     HyprlandAPI::addDispatcherV2(PHANDLE, "plugin:test:scroll", ::scroll);
+    HyprlandAPI::addDispatcherV2(PHANDLE, "plugin:test:click", ::click);
     HyprlandAPI::addDispatcherV2(PHANDLE, "plugin:test:keybind", ::keybind);
     HyprlandAPI::addDispatcherV2(PHANDLE, "plugin:test:add_rule", ::addRule);
     HyprlandAPI::addDispatcherV2(PHANDLE, "plugin:test:check_rule", ::checkRule);
+    HyprlandAPI::addDispatcherV2(PHANDLE, "plugin:test:floating_focus_on_fullscreen", ::floatingFocusOnFullscreen);
 
     // init mouse
     g_mouse = CTestMouse::create(false);
