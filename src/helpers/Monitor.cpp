@@ -1918,6 +1918,13 @@ bool CMonitor::attemptDirectScanout() {
 
     const auto PCANDIDATE = m_solitaryClient.lock();
     const auto PSURFACE   = PCANDIDATE->getSolitaryResource();
+
+    // Check for valid buffer before attempting scanout
+    if (!PSURFACE || !PSURFACE->m_current.buffer.m_buffer) {
+        Log::logger->log(Log::TRACE, "attemptDirectScanout: surface or buffer is null");
+        return false;
+    }
+
     const auto params     = PSURFACE->m_current.buffer->dmabuf();
 
     Log::logger->log(Log::TRACE, "attemptDirectScanout: surface {:x} passed, will attempt, buffer {} fmt: {} -> {} (mod {})", rc<uintptr_t>(PSURFACE.get()),
