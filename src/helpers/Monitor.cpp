@@ -1809,6 +1809,9 @@ uint16_t CMonitor::isDSBlocked(bool full) {
 
     if (!earlyExit) {
         PCANDIDATE = m_solitaryClient.lock();
+        if (!PCANDIDATE && allowWaywall)
+            PCANDIDATE = m_activeWorkspace->getFullscreenWindow();
+
         if (!PCANDIDATE) {
             reasons |= DS_BLOCK_CANDIDATE;
             earlyExit = true;
