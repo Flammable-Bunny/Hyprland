@@ -1628,6 +1628,9 @@ uint32_t CMonitor::isSolitaryBlocked(bool full) {
         return reasons;
     }
 
+    if (PCANDIDATE->m_class == "waywall")
+        return 0;
+
     if (!PCANDIDATE->opaque()) {
         reasons |= SC_OPAQUE;
         if (!full)
