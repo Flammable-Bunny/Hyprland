@@ -17,6 +17,7 @@
 #include "protocols/types/SurfaceRole.hpp"
 #include "render/Texture.hpp"
 #include <cstring>
+#include <cstdlib>
 
 using namespace NColorManagement;
 
@@ -498,9 +499,49 @@ void CWLSurfaceResource::scheduleState(WP<SSurfaceState> state) {
         m_stateQueue.unlock(state, reason);
     };
 
+    static auto traceFenceWaitEnabled = []() {
+        static int enabled = -1;
+        if (enabled == -1)
+            enabled = getenv("HYPRLAND_TRACE_FENCE_WAIT") ? 1 : 0;
+        return enabled == 1;
+    };
+
+    static auto traceFenceWaitThresholdUs = []() {
+        static uint64_t threshold = 0;
+        static bool inited        = false;
+        if (!inited) {
+            const char* env = getenv("HYPRLAND_TRACE_FENCE_WAIT_US");
+            if (env)
+                threshold = std::strtoull(env, nullptr, 10);
+            inited = true;
+        }
+        return threshold;
+    };
+
+    auto fenceWaitCallback = [&](const char* kind) {
+        if (!traceFenceWaitEnabled()) {
+            return [state, whenReadable]() { whenReadable(state, LOCK_REASON_FENCE); };
+        }
+
+        const auto start     = Time::steadyNow();
+        const auto size      = state->bufferSize;
+        const auto threshold = traceFenceWaitThresholdUs();
+
+        return [state, whenReadable, start, size, threshold, kind]() {
+            const auto now = Time::steadyNow();
+            const auto us  = std::chrono::duration_cast<std::chrono::microseconds>(now - start).count();
+
+            if (us >= static_cast<long long>(threshold)) {
+                Log::logger->log(Log::INFO, "Fence wait {} us ({}; size={}x{})", us, kind, static_cast<int>(size.x), static_cast<int>(size.y));
+            }
+
+            whenReadable(state, LOCK_REASON_FENCE);
+        };
+    };
+
     if (state->updated.bits.acquire) {
         // wait on acquire point for this surface, from explicit sync protocol
-        if (!state->acquire.addWaiter([state, whenReadable]() { whenReadable(state, LOCK_REASON_FENCE); })) {
+        if (!state->acquire.addWaiter(fenceWaitCallback("explicit-syncobj"))) {
             Log::logger->log(Log::ERR, "Failed to addWaiter in CWLSurfaceResource::scheduleState");
             whenReadable(state, LOCK_REASON_FENCE);
         }
@@ -509,7 +550,7 @@ void CWLSurfaceResource::scheduleState(WP<SSurfaceState> state) {
         m_stateQueue.unlock(state, LOCK_REASON_FENCE);
     } else if (state->buffer && state->buffer->m_syncFd.isValid()) {
         // async buffer and is dmabuf, then we can wait on implicit fences
-        g_pEventLoopManager->doOnReadable(std::move(state->buffer->m_syncFd), [state, whenReadable]() { whenReadable(state, LOCK_REASON_FENCE); });
+        g_pEventLoopManager->doOnReadable(std::move(state->buffer->m_syncFd), fenceWaitCallback("implicit-syncfd"));
     } else {
         // state commit without a buffer.
         m_stateQueue.unlock(state, LOCK_REASON_FENCE);
