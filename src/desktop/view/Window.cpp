@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <cstdlib>
 #include <ranges>
 #include <hyprutils/animation/AnimatedVariable.hpp>
 #include <re2/re2.h>
@@ -2616,17 +2617,38 @@ void CWindow::commitWindow() {
     }
 
     // tearing: if solitary, redraw it. This still might be a single surface window
+    const auto TRACE_TEARING = []() {
+        static int enabled = -1;
+        if (enabled == -1)
+            enabled = getenv("HYPRLAND_TRACE_TEARING") ? 1 : 0;
+        return enabled == 1;
+    };
+
     if (PMONITOR && PMONITOR->m_solitaryClient.lock() == m_self.lock() && canBeTorn() && PMONITOR->m_tearingState.canTear && wlSurface()->resource()->m_current.texture) {
         CRegion damageBox{wlSurface()->resource()->m_current.accumulateBufferDamage()};
 
         if (!damageBox.empty()) {
             if (PMONITOR->m_tearingState.busy) {
                 PMONITOR->m_tearingState.frameScheduledWhileBusy = true;
+                if (TRACE_TEARING())
+                    Log::logger->log(Log::INFO, "Tearing: window commit busy, scheduling while busy for {}", m_self.lock());
             } else {
                 PMONITOR->m_tearingState.nextRenderTorn = true;
+                if (TRACE_TEARING())
+                    Log::logger->log(Log::INFO, "Tearing: window commit immediate render for {}", m_self.lock());
                 g_pHyprRenderer->renderMonitor(PMONITOR);
             }
+        } else if (TRACE_TEARING()) {
+            Log::logger->log(Log::INFO, "Tearing: window commit skipped (no damage) for {}", m_self.lock());
         }
+    } else if (TRACE_TEARING()) {
+        const bool solitary = PMONITOR && PMONITOR->m_solitaryClient.lock() == m_self.lock();
+        const bool canTear  = canBeTorn();
+        const bool monTear  = PMONITOR && PMONITOR->m_tearingState.canTear;
+        const bool texture  = wlSurface()->resource()->m_current.texture != nullptr;
+        Log::logger->log(Log::INFO,
+                         "Tearing: window commit blocked for {} (solitary={} canTear={} monitorCanTear={} hasTexture={})",
+                         m_self.lock(), solitary, canTear, monTear, texture);
     }
 }
 

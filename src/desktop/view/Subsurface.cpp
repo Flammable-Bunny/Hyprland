@@ -1,4 +1,5 @@
 #include "Subsurface.hpp"
+#include <cstdlib>
 #include "../state/FocusState.hpp"
 #include "Window.hpp"
 #include "../../config/ConfigValue.hpp"
@@ -162,6 +163,45 @@ void CSubsurface::onCommit() {
         damageLastArea();
         m_lastSize     = m_wlSurface->resource()->m_current.size;
         m_lastPosition = m_subsurface->m_position;
+    }
+
+    const auto TRACE_TEARING = []() {
+        static int enabled = -1;
+        if (enabled == -1)
+            enabled = getenv("HYPRLAND_TRACE_TEARING") ? 1 : 0;
+        return enabled == 1;
+    };
+
+    // tearing: allow subsurface commits to trigger immediate render for tearing candidates
+    if (!m_windowParent.expired()) {
+        const auto WINDOW   = m_windowParent.lock();
+        const auto PMONITOR = WINDOW ? WINDOW->m_monitor.lock() : nullptr;
+        if (PMONITOR && PMONITOR->m_solitaryClient.lock() == WINDOW && WINDOW->canBeTorn() && PMONITOR->m_tearingState.canTear && m_wlSurface->resource()->m_current.texture) {
+            CRegion damageBox{m_wlSurface->resource()->m_current.accumulateBufferDamage()};
+
+            if (!damageBox.empty()) {
+                if (PMONITOR->m_tearingState.busy) {
+                    PMONITOR->m_tearingState.frameScheduledWhileBusy = true;
+                    if (TRACE_TEARING())
+                        Log::logger->log(Log::INFO, "Tearing: subsurface commit busy, scheduling while busy for {}", WINDOW);
+                } else {
+                    PMONITOR->m_tearingState.nextRenderTorn = true;
+                    if (TRACE_TEARING())
+                        Log::logger->log(Log::INFO, "Tearing: subsurface commit immediate render for {}", WINDOW);
+                    g_pHyprRenderer->renderMonitor(PMONITOR);
+                }
+            } else if (TRACE_TEARING()) {
+                Log::logger->log(Log::INFO, "Tearing: subsurface commit skipped (no damage) for {}", WINDOW);
+            }
+        } else if (TRACE_TEARING()) {
+            const bool solitary = PMONITOR && PMONITOR->m_solitaryClient.lock() == WINDOW;
+            const bool canTear  = WINDOW && WINDOW->canBeTorn();
+            const bool monTear  = PMONITOR && PMONITOR->m_tearingState.canTear;
+            const bool texture  = m_wlSurface->resource()->m_current.texture != nullptr;
+            Log::logger->log(Log::INFO,
+                             "Tearing: subsurface commit blocked for {} (solitary={} canTear={} monitorCanTear={} hasTexture={})",
+                             WINDOW, solitary, canTear, monTear, texture);
+        }
     }
 }
 
