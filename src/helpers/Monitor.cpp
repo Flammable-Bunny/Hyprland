@@ -1689,6 +1689,13 @@ uint32_t CMonitor::isSolitaryBlocked(bool full) {
 
 void CMonitor::recheckSolitary() {
     m_solitaryClient.reset(); // reset it, if we find one it will be set.
+
+    const auto PFULL = m_activeWorkspace ? m_activeWorkspace->getFullscreenWindow() : nullptr;
+    if (PFULL && PFULL->m_class == "waywall") {
+        m_solitaryClient = PFULL;
+        return;
+    }
+
     if (isSolitaryBlocked())
         return;
 
@@ -1756,8 +1763,8 @@ uint16_t CMonitor::isDSBlocked(bool full) {
     const bool  LOGDS          = *PDSLOG != 0;
     const bool  FORCE_LOG      = LOGDS && m_dsLogTimer.getMillis() >= 1000.F;
     bool        earlyExit      = false;
-    const auto  PWAYWALL = m_solitaryClient.lock();
-    const bool  allowWaywall = PWAYWALL && PWAYWALL->m_class == "waywall";
+    const auto  PFULL = m_activeWorkspace ? m_activeWorkspace->getFullscreenWindow() : nullptr;
+    const bool  allowWaywall = PFULL && PFULL->m_class == "waywall";
 
     if (LOGDS)
         full = true;
