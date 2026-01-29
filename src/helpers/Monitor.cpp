@@ -1677,14 +1677,7 @@ uint32_t CMonitor::isSolitaryBlocked(bool full) {
 
     // check if it did not open any subsurfaces or shit
     if (!PCANDIDATE->getSolitaryResource()) {
-        const auto ALLOW_WAYWALL_SOLITARY = []() {
-            static int enabled = -1;
-            if (enabled == -1)
-                enabled = getenv("HYPRLAND_SOLITARY_WAYWALL") ? 1 : 0;
-            return enabled == 1;
-        };
-
-        if (!(ALLOW_WAYWALL_SOLITARY() && PCANDIDATE->m_class == "waywall"))
+        if (PCANDIDATE->m_class != "waywall")
             reasons |= SC_SURFACES;
     }
 
