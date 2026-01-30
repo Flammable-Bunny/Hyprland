@@ -26,6 +26,7 @@ class CTearingControl {
     void                               updateWindow();
 
     SP<CWpTearingControlV1>            m_resource;
+    SP<CWLSurfaceResource>             m_surface;
     PHLWINDOWREF                       m_window;
     wpTearingControlV1PresentationHint m_hint = WP_TEARING_CONTROL_V1_PRESENTATION_HINT_VSYNC;
 

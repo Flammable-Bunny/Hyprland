@@ -47,7 +47,7 @@ void CTearingControlProtocol::onWindowDestroy(PHLWINDOW pWindow) {
 
 //
 
-CTearingControl::CTearingControl(SP<CWpTearingControlV1> resource_, SP<CWLSurfaceResource> surf_) : m_resource(resource_) {
+CTearingControl::CTearingControl(SP<CWpTearingControlV1> resource_, SP<CWLSurfaceResource> surf_) : m_resource(resource_), m_surface(surf_) {
     m_resource->setData(this);
     m_resource->setOnDestroy([this](CWpTearingControlV1* res) { PROTO::tearing->onControllerDestroy(this); });
     m_resource->setDestroy([this](CWpTearingControlV1* res) { PROTO::tearing->onControllerDestroy(this); });
@@ -67,8 +67,17 @@ void CTearingControl::onHint(wpTearingControlV1PresentationHint hint_) {
 }
 
 void CTearingControl::updateWindow() {
-    if UNLIKELY (m_window.expired())
-        return;
+    // If window wasn't found at construction time (race condition), try to find it now
+    if UNLIKELY (m_window.expired()) {
+        for (auto const& w : g_pCompositor->m_windows) {
+            if (w->wlSurface()->resource() == m_surface) {
+                m_window = w;
+                break;
+            }
+        }
+        if (m_window.expired())
+            return;
+    }
 
     m_window->m_tearingHint = m_hint == WP_TEARING_CONTROL_V1_PRESENTATION_HINT_ASYNC;
 }
