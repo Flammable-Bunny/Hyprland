@@ -1690,12 +1690,6 @@ uint32_t CMonitor::isSolitaryBlocked(bool full) {
 void CMonitor::recheckSolitary() {
     m_solitaryClient.reset(); // reset it, if we find one it will be set.
 
-    const auto PFULL = m_activeWorkspace ? m_activeWorkspace->getFullscreenWindow() : nullptr;
-    if (PFULL && PFULL->m_class == "waywall") {
-        m_solitaryClient = PFULL;
-        return;
-    }
-
     if (isSolitaryBlocked())
         return;
 
